@@ -83,9 +83,24 @@ CONTRACTS: dict[str, dict[str, tuple]] = {
         "operation": (_STR, True), "task_id": (_STR, True), "scope_hash": (_STR, True),
         "reason": (_STR, True), "risk": (_STR, True),
     },
+    # Misa conversation (provider-independent). Zenith -> provider.
+    "conversation_request": {
+        "language": (_STR, True), "question": (_STR, True), "question_type": (_STR, True),
+        "active_project": (_DICT, False), "topic_project": (_DICT, False), "compare_project": (_DICT, False),
+        "focus_ids": (_list(_STR), False),
+        "projects": (_list(_DICT), True), "items": (_list(_DICT), True), "recent_turns": (_list(_DICT), True),
+        "summary": (_STR, False), "instructions": (_list(_STR), True), "allowed_actions": (_list(_STR), True),
+        "limits": (_DICT, True), "generated_at": (_STR, True),
+    },
+    # provider -> Zenith. `cited_ids` must be a subset of the request items; text is shown to the owner.
+    "conversation_reply": {
+        "text": (_STR, True), "cited_ids": (_list(_STR), True), "uncertainty": (_list(_STR), True),
+        "follow_up": (_STR, False), "actions": (_list(_DICT), True), "needs_clarification": (_BOOL, True),
+    },
 }
 
 ENUMS = {
+    ("conversation_request", "language"): {"tr", "en"},
     ("implementation_report", "claimed_status"): {"ready_for_verification", "blocked", "failed"},
     ("review_findings", "verdict"): {"approve", "correction_required", "blocked"},
     ("next_step_proposal", "kind"): {"complete", "revise_prompt", "escalate"},

@@ -130,6 +130,9 @@ A configurable **Persona & Communication Policy** governs user-facing communicat
 
 **Acceptance criteria (future):** every user-facing Misa statement about state cites evidence ids or is labelled as opinion; no praise template fires without a verified achievement reference; risk-class messages (security, deadline, error, cost) render with the humour channel disabled; a humour-intensity setting of 0 yields zero witty remarks; a Turkish-fluency review of the default templates passes the owner; tone settings change output without changing facts.
 
+### ZENITH-REQ-011 — Project Understanding (authorized content retrieval)
+Misa must eventually retrieve, selectively and on request, authorized **project-document content**, **experiment results** and **relevant source-code sections** to answer deeper questions — never by unrestricted recursive file reading and never by sending a private repository to an external provider automatically. Rules: retrieval is query-driven and bounded (owner-named `context_files`, size caps, name-based sensitive exclusion, strict policy for content); each excerpt keeps provenance (path, revision, retrieval time, hash) and is cited like any other item; cloud transmission requires the project's cloud-consent flag; experiment results are evidence with their own origin (planned `EXPERIMENT_RESULT`). Status: **planned** (the director context dir already implements the owner-selected-files pattern; conversation uses summaries only). Milestone: after the live conversation validation (S3-02b), as an extension of the context assembler.
+
 ## Vision domains
 
 | Domain | Capability | Status |

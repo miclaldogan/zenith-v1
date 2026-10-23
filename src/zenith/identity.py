@@ -17,7 +17,7 @@ from .kernel import ZenithError
 
 PLATFORM_ID = "zenith.platform"                 # the product and orchestration platform
 ASSISTANT_ID = "zenith.assistant.primary"       # user-facing assistant persona (display name configurable)
-ROLES = ("engineering_director", "implementer", "reviewer", "verifier")
+ROLES = ("engineering_director", "implementer", "reviewer", "conversation", "verifier")
 _EMAIL_RE = re.compile(r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$")
 
 
@@ -80,6 +80,7 @@ def load(env: dict | None = None, repo: Path | None = None) -> IdentityConfig:
     roles = {"engineering_director": env.get("ZENITH_ROLE_ENGINEERING_DIRECTOR", "codex-director"),
              "implementer": env.get("ZENITH_ROLE_IMPLEMENTER", "claude-code-implementer"),
              "reviewer": env.get("ZENITH_ROLE_REVIEWER", "codex-director"),
+             "conversation": env.get("ZENITH_ROLE_CONVERSATION", "claude-code-conversation"),
              "verifier": "zenith-verifier"}
     coauthors = [_parse_person(x) for x in env.get("ZENITH_COAUTHORS", "").split(";") if x.strip()]
     return IdentityConfig(assistant, platform, owner, roles, coauthors)

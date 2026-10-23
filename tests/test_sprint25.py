@@ -508,7 +508,7 @@ class LiveGatingTests(unittest.TestCase):
                 return r
             z("init")
             listing = json.loads(z("adapters", "list").stdout)
-            self.assertEqual(len(listing), 6)
+            self.assertEqual(len(listing), 8)
             r = z("adapters", "probe", "--adapter", "claude-code-director", ok=False)
             self.assertIn("ZENITH_ENABLED_ADAPTERS", r.stderr)
             env["ZENITH_ENABLED_ADAPTERS"] = "claude-code-director"

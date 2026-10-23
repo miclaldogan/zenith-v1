@@ -104,7 +104,7 @@ _REDACTIONS = (
     re.compile(r"\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}"),
     re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b"),
 )
-_KEY_VALUE = re.compile(r"(?i)\b(api[_-]?key|secret|token|passw(?:or)?d|pwd)(\s*[:=]\s*)\S+")
+_KEY_VALUE = re.compile(r"(?i)(?<![\wçğıöşü])(api[_-]?key|secret|token|passw(?:or)?d|pwd|şifre|parola|anahtar)(\s*[:=]\s*)\S+")
 
 
 def redact(text: str) -> tuple[str, int]:

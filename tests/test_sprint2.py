@@ -245,7 +245,7 @@ class MigrationV4Tests(Base):
         con.commit(); con.close()
         Store(path).init()
         con = sqlite3.connect(path)
-        self.assertEqual(migrations.current_version(con), 4)
+        self.assertEqual(migrations.current_version(con), migrations.LATEST_VERSION)
         self.assertEqual(con.execute("SELECT operation,max_uses,use_count,project_id FROM approvals").fetchone(),
                          ("task.execute", 1, 0, "p1"))
         self.assertEqual(con.execute("SELECT scope FROM tasks").fetchone()[0], "{}")

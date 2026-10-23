@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import shlex
+from pathlib import Path
 import shutil
 import sqlite3
 import sys
@@ -13,7 +14,12 @@ from . import __version__
 def make_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="zenith", description="Zenith local-first safe kernel")
     p.add_argument("--version", action="version", version=f"zenith {__version__}")
-    cmds = p.add_subparsers(dest="cmd", required=True)
+    cmds = p.add_subparsers(dest="cmd", required=False)
+    ms = cmds.add_parser("misa", help="Interactive Misa session (default when no command is given)")
+    ms.add_argument("--once", metavar="TEXT", help="answer one message and exit (non-interactive)")
+    ms.add_argument("--eval", action="store_true", help="run conversation acceptance scenarios A/B/C on a throwaway DB (offline or mock)")
+    ms.add_argument("--provider", default=None, help="conversation adapter for --eval (default: offline composer; e.g. fake-conversation)")
+    ms.add_argument("--live-plan", action="store_true", help="print the owner-authorized live conversation test plan; makes no call")
     cmds.add_parser("init", help="Initialize the local SQLite database")
     cmds.add_parser("doctor", help="Read-only check of installed local tools")
 
@@ -228,6 +234,22 @@ def main() -> None:
     args = p.parse_args()
     store = Store()
     try:
+        if args.cmd in (None, "misa"):
+            if getattr(args, "eval", False):
+                import tempfile
+                from .misa import acceptance
+                from .extensions import load
+                base = Path(tempfile.mkdtemp(prefix="misa-eval-"))
+                acceptance.build_world(base)
+                prov = load(args.provider, "conversation", script={}) if args.provider else None
+                print(acceptance.render(acceptance.run_scenarios(Store(base / "zenith.db"), prov, state_root=base)))
+                sys.exit(0)
+            if getattr(args, "live_plan", False):
+                from .misa.acceptance import live_plan
+                output(live_plan())
+                sys.exit(0)
+            from .misa.repl import main as misa_main
+            sys.exit(misa_main(store, getattr(args, "once", None)))
         if args.cmd == "init":
             output({"db_path": store.init(), "initialized": True})
         elif args.cmd == "doctor":

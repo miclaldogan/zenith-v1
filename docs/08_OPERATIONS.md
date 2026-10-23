@@ -41,6 +41,20 @@ Task state transitions are intentionally manual and execution is unavailable; **
 
 Exit codes: `0` ok · `2` validation/state error (`Zenith error: …`) · `3` database error such as `database is locked` after the 5 s busy timeout, or a malformed file (nothing was committed) · `130` interrupted.
 
+## Misa session (offline, deterministic)
+```bash
+zenith                        # opens Misa: evidence-grounded opening, then a conversation; Ctrl-C / `çık` / `exit` save state
+zenith misa --once "nerede kaldım"      # one question, one answer, exit
+printf 'projeler\nproje 1\ngörevler\nçık\n' | zenith    # scripted (stdin not a TTY)
+```
+Understands Turkish and English (reply language follows your message; internal operations stay English): `projeler`/`projects`, `proje <ad|no>`, `durum`/`status`, `nerede kaldım`/`where did I leave off`, `kanıt`/`evidence`, `kararlar`/`decisions`, `görevler`/`tasks`, `kaynaklar`/`sources`, `geçmiş`/`history`, `onaylar`/`approvals`, `sırada ne`/`next`, `not: <metin>` / `note: <text>` (check-in → HUMAN_REPORT, never verified), `yardım`/`help`, `çık`/`exit`. Every claim cites ids (`[ev:…]`, `[task:…]`, `[run:…]`); unavailable or never-scanned sources are reported as such. Conversation state and turns persist in `conversations` / `conversation_turns` (append-only, `generated_by=deterministic`; future model turns will carry `model:<provider>:<model>`).
+
+Conversation (primary): ask naturally — "SırdaşApp'te nerede kalmıştık?", "Bu projeyi neden ertelemiştik?", "Bugün hangi işe odaklanmam mantıklı?", "Hangi projelere uzun zamandır uğramadım?", "Bunu not al, haftaya devam edeceğiz", "Peki sonra?", "O projede kaynaklar bayat mı?", "kaynakları göster". Misa resolves the project (typos and suffixes tolerated; ambiguity is asked back), retrieves a bounded set of records, and answers in prose that separates intended / reported / observed / verified / unconfirmed. Notes and tasks proposed in conversation are staged and executed only after an explicit `evet`/`yes`; approvals and agent runs stay CLI-only. Enable a model for the conversation role with `ZENITH_ROLE_CONVERSATION=claude-code-conversation` + `ZENITH_ENABLED_ADAPTERS=claude-code-conversation` (same credential/sandbox gating as other live adapters); otherwise the offline composer answers and the banner says "çevrimdışı mod".
+
+Selection semantics: the **active project** is only ever the one you selected explicitly (`proje <ad>`, or a number from a listing shown *in this session*); the opening also names the project with the most recent evidence but never switches to it. Check-ins go to the active project or to an explicit `not @Proje: …`; a note that names another registered project is refused until you target it. Source names are shown as labels/basenames; `kaynaklar detay` / `sources detail` shows full paths. The verification line states what was verified, at which revision, when, and whether it still applies (`source fresh` / `HEAD moved` / `verified source unavailable` …); an unrelated optional source being unavailable never downgrades a valid verification.
+
+Migration prerequisites for the live database (v1 → v5): stop any running `zenith` process; run `zenith doctor` (expect `schema_version` 1, `schema_expected` 5); run `zenith init` once — it writes `zenith.db.pre-v5-<UTC>.bak` first and migrates v1→v2→v3→v4→v5 in separate transactions; verify with `zenith doctor` (version 5, `source_overlaps []`). Rollback: restore the `.bak` over `zenith.db` (remove `-wal`/`-shm` first); the current code then refuses until `init` is run again. Rehearsed on a byte-copy on 2026-10-23.
+
 ## Engineering runs (fake adapters only — no live model)
 ```bash
 zenith sandbox doctor                                   # isolation baseline; ok must be true to execute anything

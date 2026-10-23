@@ -574,6 +574,66 @@ class Store:
                            "scope_hash": self._scope_hash(task), "expires_at": expiry}, actor)
         return approval_id
 
+    # ---- Misa conversation state (Sprint 3) ---------------------------------------------------
+
+    def conversation_state(self, conversation_id: str = "primary") -> dict:
+        with self.connection() as con:
+            row = con.execute("SELECT state FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+            turns = con.execute("SELECT count(*) FROM conversation_turns WHERE conversation_id=? AND role='owner'",
+                                (conversation_id,)).fetchone()[0]
+        state = _load_json(row["state"], "conversation") if row else {}
+        state["turns"] = turns
+        return state
+
+    def save_conversation_state(self, conversation_id: str, state: dict) -> None:
+        if not _NAME_RE.match(conversation_id):
+            raise ZenithError("conversation id must match [A-Za-z0-9._-]{1,64}")
+        body = json.dumps({k: v for k, v in state.items() if k != "turns"}, ensure_ascii=False)
+        with self.write() as con:
+            con.execute("INSERT INTO conversations(id,state,created_at,updated_at) VALUES (?,?,?,?) "
+                        "ON CONFLICT(id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
+                        (conversation_id, body, utcnow(), utcnow()))
+
+    def add_turn(self, conversation_id: str, role: str, language: str, intent: str | None, text: str,
+                 citations: list[str], generated_by: str = "deterministic") -> None:
+        """Append one conversation turn. `generated_by` distinguishes templates from (future) model text."""
+        if role not in ("owner", "misa") or language not in ("tr", "en"):
+            raise ZenithError("invalid turn role or language")
+        text, _ = policy.redact(text)
+        with self.write() as con:
+            if con.execute("SELECT 1 FROM conversations WHERE id=?", (conversation_id,)).fetchone() is None:
+                con.execute("INSERT INTO conversations(id,state,created_at,updated_at) VALUES (?,?,?,?)",
+                            (conversation_id, "{}", utcnow(), utcnow()))
+            con.execute("INSERT INTO conversation_turns(conversation_id,role,language,intent,text,citations,generated_by,"
+                        "occurred_at) VALUES (?,?,?,?,?,?,?,?)",
+                        (conversation_id, role, language, intent, text[:4000], json.dumps(citations[:50]), generated_by, utcnow()))
+
+    def record_exchange(self, conversation_id: str, language: str, intent: str | None, owner_text: str,
+                        misa_text: str, citations: list[str], state: dict, generated_by: str = "deterministic") -> None:
+        """Owner turn + reply + conversation state in ONE transaction: no half-recorded exchanges."""
+        if language not in ("tr", "en"):
+            raise ZenithError("invalid language")
+        if not _NAME_RE.match(conversation_id):
+            raise ZenithError("conversation id must match [A-Za-z0-9._-]{1,64}")
+        owner_text, _ = policy.redact(owner_text)
+        misa_text, _ = policy.redact(misa_text)
+        body = json.dumps({k: v for k, v in state.items() if k != "turns"}, ensure_ascii=False)
+        now = utcnow()
+        with self.write() as con:
+            con.execute("INSERT INTO conversations(id,state,created_at,updated_at) VALUES (?,?,?,?) "
+                        "ON CONFLICT(id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
+                        (conversation_id, body, now, now))
+            for role, text, gen in (("owner", owner_text, "owner"), ("misa", misa_text, generated_by)):
+                con.execute("INSERT INTO conversation_turns(conversation_id,role,language,intent,text,citations,generated_by,"
+                            "occurred_at) VALUES (?,?,?,?,?,?,?,?)",
+                            (conversation_id, role, language, intent, text[:4000], json.dumps(citations[:50]), gen, now))
+
+    def list_turns(self, conversation_id: str = "primary", limit: int = 20) -> list[dict]:
+        with self.connection() as con:
+            rows = con.execute("SELECT seq,role,language,intent,text,citations,generated_by,occurred_at FROM conversation_turns "
+                               "WHERE conversation_id=? ORDER BY seq DESC LIMIT ?", (conversation_id, max(1, min(limit, 500)))).fetchall()
+        return [{**dict(r), "citations": json.loads(r["citations"])} for r in reversed(rows)]
+
     # ---- artifacts and decisions (Engineering Director protocol persistence) --------------
 
     def add_artifact(self, con: sqlite3.Connection, kind: str, payload: dict, project_id: str,

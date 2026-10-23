@@ -70,20 +70,33 @@ def _project_brief(store, project: dict, now: datetime) -> dict:
 
     caveats: list[str] = []
     basis: list[str] = []
+    applicability = None
     if verification:
         basis.append(verification["id"])
         vd = verification["details"]
         src = next((s for s in sources if s["source_id"] == vd.get("source_id")), None)
+        # Scope-aware freshness: only the source that was verified matters. Other sources being
+        # unavailable never downgrade a valid verification; the verification row itself is never altered.
         if not vd.get("passed"):
-            status = "VERIFICATION_FAILING"
-        elif (src and src["state"] == "fresh" and src["head"] == vd.get("head")
-              and src["tracked_changed_count"] == 0):
-            status = "VERIFIED"
-            basis.append(src["evidence_id"])
+            status, applicability = "VERIFICATION_FAILING", "failed"
+        elif src is None:
+            status, applicability = "VERIFICATION_STALE", "source_removed"
+        elif src["state"] == "unavailable":
+            status, applicability = "VERIFICATION_STALE", "source_unavailable"
+        elif src["state"] in ("never_scanned", "corrupt_record"):
+            status, applicability = "VERIFICATION_STALE", "source_unknown"
+        elif src["head"] != vd.get("head"):
+            status, applicability = "VERIFICATION_STALE", "head_moved"
+        elif src["tracked_changed_count"]:
+            status, applicability = "VERIFICATION_STALE", "uncommitted_changes"
+        elif src["state"] == "stale":
+            status, applicability = "VERIFICATION_STALE", "scan_stale"
         else:
-            status = "VERIFICATION_STALE"
-            caveats.append("Verified revision %s is not confirmed as the current clean revision."
-                           % str(vd.get("head"))[:7])
+            status, applicability = "VERIFIED", "current"
+            basis.append(src["evidence_id"])
+        if status == "VERIFICATION_STALE":
+            caveats.append("Verified revision %s is not confirmed as the current clean revision (%s)."
+                           % (str(vd.get("head"))[:7], applicability))
     elif observed:
         status = "OBSERVED"
         basis += [s["evidence_id"] for s in observed if s["evidence_id"]]
@@ -161,7 +174,11 @@ def _project_brief(store, project: dict, now: datetime) -> dict:
             "status": {"label": status, "meaning": STATUS_MEANING[status], "basis": basis, "caveats": caveats},
             "sources": sources, "latest_human_report": report_view,
             "latest_verification": ({"evidence_id": verification["id"], "observed_at": verification["observed_at"],
-                                     "summary": verification["summary"], "passed": verification["details"].get("passed")}
+                                     "summary": verification["summary"], "passed": verification["details"].get("passed"),
+                                     "head": verification["details"].get("head"), "source_id": verification["details"].get("source_id"),
+                                     "command_id": verification["details"].get("command_id"),
+                                     "applies": applicability == "current", "applicability": applicability,
+                                     "current_head": next((s["head"] for s in sources if s["source_id"] == verification["details"].get("source_id")), None)}
                                     if verification else None),
             "tasks": {"open": len(tasks), "overdue": [_task_view(t) for t in overdue],
                       "due_soon": [_task_view(t) for t in due_soon], "blocked": [_task_view(t) for t in blocked]},

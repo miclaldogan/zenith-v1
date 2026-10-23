@@ -208,12 +208,26 @@ def _m004_durable_orchestration(con: sqlite3.Connection) -> None:
     _append_only(con, "decisions")
 
 
+def _m005_misa_conversations(con: sqlite3.Connection) -> None:
+    """Sprint 3: persisted Misa conversation state and an append-only turn log."""
+    con.execute("""CREATE TABLE conversations (
+        id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+    con.execute("""CREATE TABLE conversation_turns (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL REFERENCES conversations(id),
+        role TEXT NOT NULL CHECK (role IN ('owner','misa')), language TEXT NOT NULL, intent TEXT,
+        text TEXT NOT NULL, citations TEXT NOT NULL DEFAULT '[]', generated_by TEXT NOT NULL DEFAULT 'deterministic',
+        occurred_at TEXT NOT NULL)""")
+    con.execute("CREATE INDEX idx_turns_conversation ON conversation_turns(conversation_id, seq)")
+    _append_only(con, "conversation_turns")
+
+
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 MIGRATIONS: list[Migration] = [
     (1, "sprint0_baseline", _m001_baseline),
     (2, "sprint1_verified_project_memory", _m002_verified_project_memory),
     (3, "sprint1_hardening_integrity_and_ordering", _m003_integrity_and_ordering),
     (4, "sprint2_durable_orchestration", _m004_durable_orchestration),
+    (5, "sprint3_misa_conversations", _m005_misa_conversations),
 ]
 LATEST_VERSION = MIGRATIONS[-1][0]
 

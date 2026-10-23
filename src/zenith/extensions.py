@@ -20,7 +20,7 @@ from .contracts import SCHEMA_VERSION
 from .kernel import ZenithError
 
 ENTRY_POINT_GROUP = "zenith.adapters"
-KINDS = ("director", "implementer")
+KINDS = ("director", "implementer", "conversation")
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,16 @@ class AdapterManifest:
         return d
 
 
+def _fake_conversation(script=None):
+    from .misa.conversation import FakeConversationProvider
+    return FakeConversationProvider(script)
+
+
+def _claude_conversation(script=None):
+    from .misa.conversation import ClaudeCodeConversation
+    return ClaudeCodeConversation(script)
+
+
 _BUILTIN = (
     AdapterManifest("fake-director", "director", SCHEMA_VERSION, FakeDirector, live=False, permissions=()),
     AdapterManifest("fake-implementer", "implementer", SCHEMA_VERSION, FakeImplementer, live=False,
@@ -56,6 +66,10 @@ _BUILTIN = (
                     version="cli-0.162.1-verified"),
     AdapterManifest("codex-implementer", "implementer", SCHEMA_VERSION, CodexImplementer, live=True,
                     permissions=("unsupported:autonomous-execution",), version="cli-0.162.1-verified"),
+    AdapterManifest("fake-conversation", "conversation", SCHEMA_VERSION, _fake_conversation, live=False),
+    AdapterManifest("claude-code-conversation", "conversation", SCHEMA_VERSION, _claude_conversation, live=True,
+                    permissions=("network:api.anthropic.com:443", "credentials:claude", "context:read-only"),
+                    version="cli-2.1.309-verified"),
 )
 
 
@@ -112,7 +126,7 @@ def load(name: str, kind: str, script: dict | None = None):
     if m.live and name not in enabled_names():
         raise ZenithError(f"{name} is a live provider adapter; enable it explicitly with ZENITH_ENABLED_ADAPTERS")
     adapter = m.factory(script) if script is not None else m.factory()
-    expected = DirectorAdapter if kind == "director" else ImplementerAdapter
+    expected = {"director": DirectorAdapter, "implementer": ImplementerAdapter}.get(kind, DirectorAdapter)
     for attr in ("name", "capabilities", "check_auth"):
         if not hasattr(adapter, attr):
             raise ZenithError(f"{name} does not implement the {expected.__name__} port ({attr} missing)")
