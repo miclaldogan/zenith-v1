@@ -101,7 +101,7 @@ class MigrationV3Tests(Base):
         con = sqlite3.connect(path)
         rows = con.execute("SELECT seq, summary FROM evidence ORDER BY recorded_at").fetchall()
         self.assertEqual(rows, [(1, "first"), (2, "second")])
-        self.assertEqual(len(list(self.root.glob("legacy-v2.db.pre-v3-*.bak"))), 1)
+        self.assertEqual(len(list(self.root.glob("legacy-v2.db.pre-v*.bak"))), 1)
         # New rows continue the sequence, assigned inside the write transaction.
         store = Store(path)
         pid = store.list_projects()[0]["id"]

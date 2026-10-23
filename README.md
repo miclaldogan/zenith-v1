@@ -19,9 +19,15 @@ Zenith is an independent personal project intelligence and multi-agent orchestra
 - `zenith backup --out FILE` using the SQLite backup API (never overwrites).
 - Stdlib-only; offline tests; no network or automatic code execution.
 
+**Sprint 2 (mock-agent orchestration, schema v4):** Engineering Director protocol with persistent, digest-stamped prompt artifacts; durable execution runs (leases, idempotency, cancellation, timeouts, bounded retries, crash → `RECONCILE_REQUIRED`); single-use scope-hashed approvals consumed atomically, revocable; isolated Git worktrees; **bubblewrap-sandboxed** deterministic verification (fail closed if isolation is unavailable); extension registry (entry points). Everything runs with **fake adapters only** — `zenith demo poc` shows the full workflow in a throwaway repository. No Claude Code or Codex is executed. Requirements registry: [`docs/11_REQUIREMENTS_REGISTRY.md`](docs/11_REQUIREMENTS_REGISTRY.md).
+
+**Sprint 2.5 (live-agent readiness, no live call made):** gated Claude Code / Codex adapters that run the CLIs inside a bubblewrap *provider profile* — unshared network with egress only through Zenith's allowlisting proxy, owner-named credential file bound read-only (never read by Zenith), edit-only Claude implementer (`--restricted`), forbidden-tool kill switch, classified failures (`auth`, `connection`, `interrupted`, `policy_violation`, `unsupported`…), USD budget accounting; REQ-004 identity (`zenith identity`); explicit smoke-test procedure (`zenith smoke`). `codex-implementer` is marked unsupported. Details: [`docs/plans/SPRINT_2_5_READINESS.md`](docs/plans/SPRINT_2_5_READINESS.md), ADR-007.
+
+**Sprint 2.6 (live-integration validation, still no live call):** authentication matrix for the installed CLIs (owner is logged into Claude Code via a claude.ai team subscription → `oauth` mode with `claude setup-token`; `api_key` mode for Console billing), credentials injected inside the sandbox by the forwarder (Zenith never reads them), command-free Codex director (`--disable shell_tool`), directors read a minimal context directory instead of the repository, worktree credential pre-scan, proxy hardening (private-destination blocking, anti-rebinding, IPv6, header-free logs), full-pipeline smoke test with an explicit authorization request. Report: [`docs/plans/SPRINT_2_6_VALIDATION.md`](docs/plans/SPRINT_2_6_VALIDATION.md). Sprint 3 plan: [`docs/plans/SPRINT_3_PLAN.md`](docs/plans/SPRINT_3_PLAN.md).
+
 Sprint 1 acceptance audit and hardening record: [`docs/plans/SPRINT_1_ACCEPTANCE.md`](docs/plans/SPRINT_1_ACCEPTANCE.md). Sprint 2 plan (not implemented): [`docs/plans/SPRINT_2_PLAN.md`](docs/plans/SPRINT_2_PLAN.md).
 
-**Not implemented:** agent execution, test execution (so nothing can reach `VERIFIED` through the CLI yet — `record_test_verification` is library plumbing for Sprint 2's deterministic verifier), TUI, MCP, Gmail, Calendar, Telegram, remote Hub/Node sync, tmux automation, Hyprland window management, autonomous planning. Never claim they are functional.
+**Not implemented:** live model execution (Claude Code / Codex adapters), autonomous commits/push, TUI, MCP, Gmail, Calendar, Telegram, remote Hub/Node sync, tmux automation, Hyprland window management, autonomous planning. Never claim they are functional.
 
 ## Start on Arch Linux
 

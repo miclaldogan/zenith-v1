@@ -141,11 +141,79 @@ def _m003_integrity_and_ordering(con: sqlite3.Connection) -> None:
                     "BEGIN SELECT RAISE(ABORT,'source path overlaps an existing source'); END")
 
 
+def _append_only(con: sqlite3.Connection, table: str, allow_update_cols: tuple[str, ...] = ()) -> None:
+    con.execute(f"CREATE TRIGGER {table}_no_delete BEFORE DELETE ON {table} "
+                f"BEGIN SELECT RAISE(ABORT,'{table} is append-only'); END")
+    cols = [r[1] for r in con.execute(f"PRAGMA table_info({table})") if r[1] not in allow_update_cols]
+    changed = " OR ".join(f"NEW.{c} IS NOT OLD.{c}" for c in cols)
+    con.execute(f"CREATE TRIGGER {table}_no_rewrite BEFORE UPDATE ON {table} WHEN {changed} "
+                f"BEGIN SELECT RAISE(ABORT,'{table} is append-only'); END")
+
+
+def _m004_durable_orchestration(con: sqlite3.Connection) -> None:
+    """Sprint 2: approval consumption, execution runs, leases, worktrees, artifacts, decisions."""
+    # Approvals become operation-scoped, bounded-use, revocable and append-only.
+    for ddl in ("operation TEXT NOT NULL DEFAULT 'task.execute'", "project_id TEXT",
+                "max_uses INTEGER NOT NULL DEFAULT 1", "use_count INTEGER NOT NULL DEFAULT 0",
+                "used_at TEXT", "used_by TEXT", "revoked_at TEXT", "revoke_reason TEXT"):
+        con.execute(f"ALTER TABLE approvals ADD COLUMN {ddl}")
+    con.execute("UPDATE approvals SET project_id=(SELECT project_id FROM tasks WHERE tasks.id=approvals.task_id)")
+    _append_only(con, "approvals", ("use_count", "used_at", "used_by", "revoked_at", "revoke_reason"))
+    con.execute("CREATE TRIGGER approvals_bounded_use BEFORE UPDATE OF use_count ON approvals "
+                "WHEN NEW.use_count > NEW.max_uses OR NEW.use_count < OLD.use_count "
+                "BEGIN SELECT RAISE(ABORT,'approval use exceeds max_uses'); END")
+
+    # Owner-defined engineering scope travels with the task and is part of its scope hash.
+    con.execute("ALTER TABLE tasks ADD COLUMN scope TEXT NOT NULL DEFAULT '{}'")
+
+    con.execute("""CREATE TABLE execution_runs (
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
+        project_id TEXT NOT NULL REFERENCES projects(id), source_id TEXT REFERENCES project_sources(id),
+        idempotency_key TEXT NOT NULL UNIQUE, attempt INTEGER NOT NULL,
+        state TEXT NOT NULL, stage TEXT, director TEXT NOT NULL, implementer TEXT NOT NULL,
+        lease_owner TEXT, lease_expires_at TEXT, cancel_requested_at TEXT,
+        worktree_id TEXT, base_head TEXT, context_artifact_id TEXT, prompt_artifact_id TEXT,
+        budget TEXT NOT NULL DEFAULT '{}', usage TEXT NOT NULL DEFAULT '{}',
+        exit_reason TEXT, created_at TEXT NOT NULL, started_at TEXT, ended_at TEXT)""")
+    con.execute("CREATE INDEX idx_runs_task ON execution_runs(task_id, attempt)")
+    con.execute("CREATE INDEX idx_runs_state ON execution_runs(state)")
+
+    con.execute("""CREATE TABLE worktrees (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+        source_id TEXT NOT NULL REFERENCES project_sources(id), run_id TEXT NOT NULL REFERENCES execution_runs(id),
+        path TEXT NOT NULL UNIQUE, branch TEXT NOT NULL, base_head TEXT NOT NULL,
+        created_at TEXT NOT NULL, removed_at TEXT)""")
+    # Single writer per source: at most one live worktree per registered directory.
+    con.execute("CREATE UNIQUE INDEX idx_worktrees_single_writer ON worktrees(source_id) WHERE removed_at IS NULL")
+
+    con.execute("""CREATE TABLE run_events (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES execution_runs(id),
+        stage TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', occurred_at TEXT NOT NULL)""")
+    con.execute("CREATE INDEX idx_run_events_run ON run_events(run_id, seq)")
+    _append_only(con, "run_events")
+
+    con.execute("""CREATE TABLE artifacts (
+        id TEXT PRIMARY KEY, seq INTEGER NOT NULL UNIQUE, kind TEXT NOT NULL, schema_version TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id), task_id TEXT REFERENCES tasks(id),
+        run_id TEXT REFERENCES execution_runs(id), parent_id TEXT REFERENCES artifacts(id),
+        produced_by TEXT NOT NULL, payload TEXT NOT NULL, digest TEXT NOT NULL, created_at TEXT NOT NULL)""")
+    con.execute("CREATE INDEX idx_artifacts_task ON artifacts(task_id, kind, seq)")
+    con.execute("CREATE INDEX idx_artifacts_run ON artifacts(run_id, seq)")
+    _append_only(con, "artifacts")
+
+    con.execute("""CREATE TABLE decisions (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), task_id TEXT REFERENCES tasks(id),
+        run_id TEXT REFERENCES execution_runs(id), artifact_id TEXT REFERENCES artifacts(id),
+        decision TEXT NOT NULL, rationale TEXT NOT NULL, made_by TEXT NOT NULL, created_at TEXT NOT NULL)""")
+    _append_only(con, "decisions")
+
+
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 MIGRATIONS: list[Migration] = [
     (1, "sprint0_baseline", _m001_baseline),
     (2, "sprint1_verified_project_memory", _m002_verified_project_memory),
     (3, "sprint1_hardening_integrity_and_ordering", _m003_integrity_and_ordering),
+    (4, "sprint2_durable_orchestration", _m004_durable_orchestration),
 ]
 LATEST_VERSION = MIGRATIONS[-1][0]
 

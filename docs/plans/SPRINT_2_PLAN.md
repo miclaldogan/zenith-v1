@@ -1,6 +1,6 @@
 # Sprint 2 — Controlled agent collaboration POC: implementation plan
 
-**Status:** plan only (2026-10-23). Nothing here is implemented. Live Claude Code / Codex execution is **out of Sprint 2 scope**; Sprint 2 ends with the fake-adapter proof of concept. Decisions that change architecture are in `docs/adr/ADR-005-agent-execution-boundaries.md` (proposed).
+**Status 2026-10-23 (end of Sprint 2 implementation):** S2-01…S2-08 implemented with fake adapters; see §9 checklist and §10 next stage. The design below is the original plan; deviations are noted in §9. Live Claude Code / Codex execution is **out of Sprint 2 scope**; Sprint 2 ends with the fake-adapter proof of concept. Decisions that change architecture are in `docs/adr/ADR-005-agent-execution-boundaries.md` (proposed).
 
 ## 0. Principles carried over
 - Zenith owns task state; adapters return *claims*. No model output grants permission, changes authorization, or marks anything verified.
@@ -108,3 +108,31 @@ Negative variants: implementer touches a file outside scope → `BLOCKED`; test 
 | S2-09 *(future sprint, gated)* | Claude Code / Codex CLI adapters behind explicit owner config, `check_auth`, fixture-replayed tests only in CI | S2-08 accepted by owner | no live call in tests; owner authorizes first live run |
 
 Owner decisions needed before S2-06: (a) approve `RECONCILE_REQUIRED` as a new task state (ADR-005); (b) choose the sandbox baseline for this machine (`bwrap` availability); (c) confirm that no adapter may ever receive `L3`/`L4` capabilities in Sprint 2.
+
+## 9. Progress checklist (what exists, honestly)
+
+| ID | Status | Evidence |
+|---|---|---|
+| S2-01 schema v4, `RECONCILE_REQUIRED`, approval consumption | **done** | `migrations._m004_*`, `MigrationV4Tests`, `ApprovalTests` |
+| S2-02 adapter ports + fake adapters + fixture modes (ok, invalid_output, timeout, crash, hang, wait_for_cancel, auth_error, disagree) | **done** | `agents/`, `ExtensionTests`, `WorkflowTests` |
+| S2-03 worktree manager, single writer, diff scope | **done** | `worktree.py`, `WorktreeTests` |
+| S2-04 executor: bubblewrap, env sanitization, caps, timeouts, rlimits, fail closed | **done** (seccomp, `systemd-run` properties: not yet) | `sandbox.py`, `SandboxTests`, `SandboxFailClosedTests` |
+| S2-05 verifier | **done** | `verify.py`, false-claim / out-of-scope tests |
+| S2-06 orchestrator: leases, consumption, stages, cancel, crash recovery, retries, budget | **done** (wall-clock budget; USD cost accounting waits for live adapters) | `orchestration.py`, `WorkflowTests` |
+| S2-07 CLI | **done** | `director plan`, `run *`, `worker`, `artifacts`, `decisions`, `adapters`, `sandbox doctor`, `demo poc` |
+| S2-08 POC + docs | **done** | `demo.py`, five scenarios |
+| REQ-001 director protocol (added mid-sprint) | **done (simulated)** | `contracts.py`, artifacts table, `test_model_output_cannot_grant_permissions` |
+| REQ-003 extension registry (added mid-sprint) | **done (minimal)** | `extensions.py`, ADR-006 |
+| S2-09 live Claude Code / Codex adapters | **prepared (Sprint 2.5)**: adapters, provider sandbox profile, allowlist proxy, mock-CLI tests; live call gated | `agents/providers.py`, `plans/SPRINT_2_5_READINESS.md`, ADR-007 |
+
+Deviations from the original plan: `run_events` payloads are stored in the database (capped at 20 kB) instead of JSONL files; `execution_runs.id` is a UUID with a separate `idempotency_key`; the fake implementer runs in-process rather than as a subprocess (a live one will not); `BLOCKED → COMPLETED` (owner accept) was added for reviewer disagreement.
+
+## 10. Next stage: real Claude Code and Codex (S2-09, owner-gated) — superseded by `SPRINT_2_5_READINESS.md`
+The items below were the plan; what was actually built differs in two ways: the implementer is **edit-only** (`--restricted`), and Codex is a **director only**. The network-policy decision is ADR-007.
+Preconditions: owner accepts ADR-005/ADR-006; the fake POC stays green; an explicit `ZENITH_ENABLED_ADAPTERS` entry per live adapter; a written decision on the implementer's network policy.
+1. **`codex-director`** (`codex exec --json --output-schema <contract> -s read-only -C <scratch> --ephemeral --ignore-user-config`): read-only sandbox mode, stdout JSONL parsed by a contract-driven parser (no prose), `check_auth` via `codex login status`, budget via wall clock; fixtures recorded from real output and replayed in tests (no live call in the suite).
+2. **`claude-code-implementer`** (`claude -p --output-format stream-json --json-schema <implementation_report> --permission-mode <non-bypass> --add-dir <worktree> --max-budget-usd N`): runs **inside** the bubblewrap sandbox with a provider-only network policy (decision: `pasta`/proxy vs. host execution with sanitized env — ADR required), `HOME` = tmpfs with only the provider's auth material mounted read-only, worktree as the only writable path, process-group kill on timeout, JSONL events streamed into `run_events`.
+3. Cost accounting into `execution_runs.usage`; `max_budget_usd` enforced from provider usage events.
+4. Lease heartbeats from a thread while the subprocess runs; `resume` only when the lease is still held and the provider supports it (Claude `--resume`; Codex: none).
+5. Contract tests: success, timeout, auth failure, invalid JSON, oversized output, prompt-injection corpus — all from replayed fixtures.
+6. Package move `zenith.engineering.*` (ADR-006), `zenith.toml` configuration, `systemd-run` resource properties.

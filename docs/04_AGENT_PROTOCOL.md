@@ -3,6 +3,7 @@
 This is **Zenith's internal task contract**, not a claim of standard protocol compatibility. MCP is an exposure surface for tools; ACP governs durable tasks, approvals and evidence.
 
 ## 1. Roles
+The roles below are the engineering instance of Zenith's general **specialist role** concept (REQ-009): a role is a logical capability, filled per task by an adapter chosen through the extension registry and model routing, speaking only versioned contracts. Research roles (Research Lead, Literature Discovery, Paper Analysis, Methodology Judge, Evidence Judge, Synthesis) and the Creative Reasoning Agent will use the same mechanism with their own contract family (`zenith.research.v1`, future).
 - **Zenith Orchestrator:** owns task state, authorized context, role assignment, budget, deadlines, worktree lease.
 - **Architect/Planner** (Codex default, replaceable): produces bounded plan with measurable acceptance criteria; no write permissions by default.
 - **Implementer** (Claude Code default, replaceable): modifies an isolated authorized worktree, runs approved tests, produces structured report.
@@ -31,6 +32,14 @@ stateDiagram-v2
 ```
 
 **Guard rule:** state transitions are made by Zenith code, not by any LLM text. A worktree write always needs policy allowance and valid approval scope; even when the task state is `QUEUED`.
+
+### 2b. Implemented state machine additions (Sprint 2)
+- `RUNNING`/`VERIFYING` → `RECONCILE_REQUIRED` when a worker crashes or a lease expires; `RECONCILE_REQUIRED` → `QUEUED | BLOCKED | FAILED | CANCELLED` only by the owner (`zenith run reconcile`), and `→ QUEUED` needs a fresh approval.
+- `BLOCKED → COMPLETED` only through `zenith run accept` when the run holds a **passing** verification (reviewer disagreement override).
+- Any `→ COMPLETED` requires a passing `TEST_VERIFICATION` evidence id; the kernel checks the row, not a claim.
+- A new or revised implementation prompt bumps `tasks.version`, changing the scope hash and invalidating prior approvals.
+
+Execution runs have their own states: `PENDING → RUNNING → VERIFYING → REVIEWING → COMPLETED | BLOCKED | FAILED | CANCELLED | RECONCILE_REQUIRED`, with stages `start, implement, verify, review, finalize`, a lease (`owner`, `expires_at`, heartbeat) and an idempotency key `sha256(task, scope_hash, attempt)`.
 
 ## 3. Machine-readable task envelope (illustrative)
 ```json
@@ -81,6 +90,22 @@ Do not let the model edit the authorization envelope. Cryptographically hash can
 ```
 
 `claimed_status` is *not* a trusted `task.state`. Verification independently runs the checks and reads output.
+
+## 5. Engineering Director protocol (implemented, `zenith.director.v1`)
+All messages are strict JSON objects validated by `zenith.contracts` (required fields, types, enums, **no unknown fields** — a model cannot add `authorization`). Persisted messages are immutable `artifacts` rows with a digest and a parent link.
+
+| Contract | Producer | Persisted as | Notes |
+|---|---|---|---|
+| `context_package` | Zenith | artifact | task, sources, last 10 evidence rows with ids, brief status, previous prompt/review/verification ids, constraints |
+| `architecture_proposal` | Director | artifact (+ `decisions` rows) | summary, decisions, risks, decomposition |
+| `engineering_decision`, `task_decomposition` | Director | inside proposal | |
+| `implementation_prompt` | Director (authored) + **Zenith (stamped `zenith` block)** | artifact; revisions link to `parent_prompt_id` | Zenith sets `allowed_scope`, `exclusions`, `acceptance_commands`, `authorization`, `revision`, `context_ref`; director-proposed scope outside the owner's is recorded as `scope_narrowed` |
+| `implementation_report` | Implementer | artifact | claims only; compared against reality by the verifier |
+| `verification_report` | Zenith verifier | artifact + `TEST_VERIFICATION` evidence per command | `passed` is computed from exit codes, scope, revision, artifacts |
+| `review_findings` + `next_step_proposal` (`complete`, `revise_prompt`, `escalate`) | Director | artifact (+ decision) | advisory; a `revised_prompt` becomes the next prompt revision |
+| `approval_request` | Zenith | (future: outbox) | |
+
+Rules: the director receives the **verification report** before writing corrective instructions; prompts are never recycled blindly — every revision has a `revision_reason`, a parent and a fresh context reference.
 
 ## 5. Retry and non-repetition policy
 - Max 3 attempts, 2 reviewer loops by default; strict budget and wall-clock deadline.

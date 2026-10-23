@@ -65,6 +65,38 @@ UI suggestion is not permission. Telegram buttons must reference one task ID, sc
 9. Missing/invalid credentials do not trigger insecure fallback.
 10. Stale device status is never shown as live.
 
+## 7b. Execution threat model (Sprint 2, implemented baseline)
+**Trust zones.** (1) Zenith orchestration code and the verifier: trusted. (2) Provider adapters: semi-trusted — their output is validated, never obeyed. (3) Repository code, tests and build scripts: **untrusted**, may be malicious. (4) Worktrees: disposable, the only writable location for an implementer. (5) Secrets, credentials, `$HOME`, SSH agent, unrelated repositories: never reachable from zone 3.
+
+**Baseline (bubblewrap, fail closed).** `sandbox.detect()` probes the real kernel/runtime; if the probe does not prove user namespaces, hidden `/home`, a closed network and a read-only root, `run_isolated` **refuses** — there is no host fallback and no opt-out flag. Inside: all namespaces unshared, `--ro-bind /usr`, `--tmpfs /tmp`, `--tmpfs /home/sandbox`, `--bind <worktree> /work`, `--clearenv` with a fixed `PATH/HOME/LANG`, `--die-with-parent`, `--new-session`, `--remount-ro /`, `rlimit` CPU and file size, output cap (a truncated run is never a pass), process-group kill on timeout, argv only (no shell). `systemd-run --user` is available on this machine and is the planned lifecycle/accounting layer (`MemoryMax`, `CPUQuota`); it is **not** a substitute for the namespace sandbox.
+
+| Threat | Mitigation | Test |
+|---|---|---|
+| Test/build script reads `~/.ssh`, tokens, other repos | no `/home`, cleared env, ro root | `test_home_credentials_and_network_are_unreachable` |
+| Exfiltration over the network | `--unshare-net` | same |
+| Writes outside the worktree / RAM exhaustion via tmpfs root | `--remount-ro /` (found by the test suite during this sprint and fixed) | `test_only_the_worktree_is_writable` |
+| Fork bomb / runaway process | process group kill on timeout, CPU rlimit, `--die-with-parent` | `test_timeout_kills_process_group_and_output_is_capped` |
+| Shell injection through acceptance commands | argv arrays, validated at task creation, no shell anywhere | `test_no_shell_interpolation` |
+| Repository hooks run during checkout | `core.hooksPath=/dev/null`, `core.fsmonitor=false` | `test_repo_hooks_do_not_run` |
+| Implementer edits outside scope / commits / pushes | diff-scope check, HEAD must equal base, no credentials, `can_push=false` stamped by Zenith | `test_out_of_scope_change_is_blocked_with_revised_prompt` |
+| False "tests passed" claims | verifier runs commands itself; claims mismatch recorded | `test_false_claims_never_complete` |
+| Model grants itself permissions | strict contracts reject unknown fields; approvals only from owner CLI; scope stamped by Zenith | `test_model_output_cannot_grant_permissions` |
+| Approval replay / reuse / expiry / revocation / plan drift | atomic consumption with bounded `use_count`, immutable expiry, revocation, scope hash incl. task version | `ApprovalTests` |
+| Worker crash re-executes side effects | leases → `RECONCILE_REQUIRED`; owner decides; retry needs a fresh approval | `test_worker_crash_leaves_stale_lease_then_reconciled` |
+| Two workers on one repository | one live worktree per source (DB unique index) checked before anything is consumed | `test_crash_during_implementation_requires_reconciliation` |
+
+**Residual risks (documented, not mitigated yet).** User namespaces are kernel attack surface; no seccomp filter; no memory limit until `systemd-run` properties are wired; the fake implementer runs in-process (trusted by construction) — a live implementer CLI needs its own network policy decision (provider API reachable, everything else closed), to be made in S2-09 with an ADR; the DB append-only triggers are not cryptographic (ADR-004).
+
+## 7c. Live provider execution (Sprint 2.5, prepared — no live call made)
+Design and rationale: ADR-007. Summary of the enforced boundary:
+- **Provider profile** (`sandbox.SandboxProfile("provider")`): network namespace unshared; egress only through `netproxy.AllowlistProxy` (CONNECT, `host:port` allowlist, audited); credential file bound read-only at the CLI's expected path; tmpfs `HOME`; cleared env; CLI binary bound read-only under `/opt/zenith/bin`; `/work` rw for the implementer, ro for the director.
+- **Verification profile**: no credentials, no proxy, no `/run/zenith` — untrusted code never meets a secret.
+- **Claude Code**: `--bare --restricted --permission-prompts none`, explicit `--tools`, forbidden tools denied *and* watched in the stream (a forbidden `tool_use` kills the process group → `BLOCKED/policy_violation`). **Codex**: `exec -s read-only --ephemeral --ignore-user-config --ignore-rules`; director only.
+- **Credentials**: owner-named files only (`ZENITH_ANTHROPIC_API_KEY_FILE`, `ZENITH_CODEX_AUTH_FILE`), 0600 enforced, never read by Zenith, never auto-discovered from `~/.claude` or `~/.codex`.
+- **Gates**: `ZENITH_ENABLED_ADAPTERS` per live adapter; `zenith smoke --authorize-live-call` + `ZENITH_LIVE_SMOKE_ACK`; the test suite uses mock executables only.
+- **Unsupported**: `codex-implementer` (refuses). Threat table and residual risks: `plans/SPRINT_2_5_READINESS.md` §3.
+- **Sprint 2.6 additions**: credential files are read inside the sandbox by the forwarder (`--env-file`), never by Zenith; Claude `oauth` mode (`--safe-mode`) for subscription logins and `api_key` mode (`--bare`); Codex `--disable shell_tool --disable unified_exec` + `command_execution` kill switch; directors read a minimal context directory instead of the repository (`scope.context_files` is the owner's opt-in for file contents); worktrees containing credential-like names are refused before any implementer runs; the proxy blocks private/loopback destinations, connects to vetted resolved addresses and never logs headers. Full audit: `plans/SPRINT_2_6_VALIDATION.md` §3–§5.
+
 ## 8. Supplier/licensing constraints
 The Claude Code CLI has noninteractive interfaces; **do not** use personal Claude subscription login as a credential proxy for a third-party generic API, and don't make unverified assumptions about unattended automation under a subscription. For product-like programmatic Agent SDK calls use authorized API-key/provider integrations consistent with terms. Codex integrations must follow their current authentication and CLI sandbox docs. Confirm at actual integration time.
 

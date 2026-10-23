@@ -29,14 +29,20 @@ TRANSITIONS = {
     "PLANNED": {"AWAITING_APPROVAL", "QUEUED", "CANCELLED"},
     "AWAITING_APPROVAL": {"QUEUED", "CANCELLED"},
     "QUEUED": {"RUNNING", "CANCELLED"},
-    "RUNNING": {"VERIFYING", "BLOCKED", "FAILED"},
-    "VERIFYING": {"COMPLETED", "BLOCKED", "FAILED"},
-    "BLOCKED": {"QUEUED", "CANCELLED"},
+    "RUNNING": {"VERIFYING", "BLOCKED", "FAILED", "RECONCILE_REQUIRED"},
+    "VERIFYING": {"COMPLETED", "BLOCKED", "FAILED", "RECONCILE_REQUIRED"},
+    "BLOCKED": {"QUEUED", "CANCELLED", "COMPLETED"},        # -> COMPLETED only with a passing verification
+    "RECONCILE_REQUIRED": {"QUEUED", "BLOCKED", "FAILED", "CANCELLED"},  # owner decides (ADR-005)
     "COMPLETED": set(),
     "CANCELLED": set(),
     "FAILED": set(),
 }
 CLI_TRANSITIONS = {"CONTEXT_READY", "PLANNED", "AWAITING_APPROVAL", "QUEUED", "CANCELLED"}
+# Operations an approval can name. Only task.execute is grantable now; the Git operations are the
+# designed-but-unavailable REQ-002 permissions (see docs/11_REQUIREMENTS_REGISTRY.md).
+APPROVAL_OPERATIONS = ("task.execute", "git.branch", "git.worktree", "git.stage", "git.commit",
+                       "git.push", "git.pr.open", "git.pr.merge")
+GRANTABLE_OPERATIONS = ("task.execute",)
 TERMINAL_STATES = {s for s, nxt in TRANSITIONS.items() if not nxt}
 
 EVIDENCE_ORIGINS = ("HUMAN_REPORT", "REPOSITORY_OBSERVATION", "TEST_VERIFICATION", "DOCUMENT", "MODEL_INFERENCE")
@@ -52,6 +58,15 @@ def utcnow() -> str:
     """Microsecond UTC. Lexicographic order of these strings equals chronological order,
     also against the second-resolution values written before schema v3."""
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+def state_dir() -> Path:
+    """Worktrees and run logs live here, never inside a registered project."""
+    override = os.environ.get("ZENITH_STATE_DIR")
+    if override:
+        return Path(override).expanduser()
+    base = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))).expanduser()
+    return base / "zenith"
 
 
 def default_db_path() -> Path:
@@ -301,8 +316,27 @@ class Store:
                           {"project_id": src["project_id"], "from": src["path"], "to": str(p)})
         return {"source_id": source_id, "project_id": src["project_id"], "path": str(p)}
 
+    @staticmethod
+    def _validate_scope(scope: dict | None) -> str:
+        """Owner-defined engineering scope: allowed/excluded file globs and acceptance commands."""
+        scope = dict(scope or {})
+        unknown = set(scope) - {"allowed_files", "excluded_files", "acceptance", "artifacts", "context_files"}
+        if unknown:
+            raise ZenithError("Unknown scope keys: " + ", ".join(sorted(unknown)))
+        for key in ("allowed_files", "excluded_files", "artifacts", "context_files"):
+            vals = scope.get(key, [])
+            if not isinstance(vals, list) or not all(isinstance(v, str) and v and ".." not in v.split("/")
+                                                     and not v.startswith("/") for v in vals):
+                raise ZenithError(f"scope.{key} must be a list of relative glob strings")
+        for cmd in scope.get("acceptance", []):
+            if (not isinstance(cmd, dict) or not isinstance(cmd.get("argv"), list) or not cmd["argv"]
+                    or not all(isinstance(a, str) and a for a in cmd["argv"])
+                    or not isinstance(cmd.get("expected_exit", 0), int)):
+                raise ZenithError("scope.acceptance entries need a non-empty argv list (no shell) and int expected_exit")
+        return json.dumps(scope, sort_keys=True)
+
     def add_task(self, project_id: str, title: str, objective: str = "", risk: str = "L0",
-                 due_at: str | None = None) -> str:
+                 due_at: str | None = None, scope: dict | None = None) -> str:
         if risk not in RISK_LEVELS:
             raise ZenithError("Risk must be L0, L1, L2, L3 or L4")
         title = title.strip()
@@ -315,12 +349,13 @@ class Store:
                 due_at = dates.iso_utc(dates.parse_due(due_at))
             except ValueError as exc:
                 raise ZenithError("due_at must be ISO 8601 (e.g. 2026-11-01)") from exc
+        scope_json = self._validate_scope(scope)
         task_id = _uuid()
         with self.write() as con:
             con.execute(
-                "INSERT INTO tasks (id,project_id,title,objective,risk,state,created_at,due_at) "
-                "VALUES (?,?,?,?,?,?,?,?)",
-                (task_id, project_id, title, objective, risk, "DRAFT", utcnow(), due_at),
+                "INSERT INTO tasks (id,project_id,title,objective,risk,state,created_at,due_at,scope) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (task_id, project_id, title, objective, risk, "DRAFT", utcnow(), due_at, scope_json),
             )
             _record_event(con, "task", task_id, "task.created", {"title": title, "risk": risk})
         return task_id
@@ -403,20 +438,92 @@ class Store:
             _record_event(con, "task", task_id, "task.dependency_removed", {"depends_on": depends_on})
 
     @staticmethod
-    def _scope_hash(task: sqlite3.Row) -> str:
-        scope = {k: task[k] for k in ("id", "project_id", "title", "objective", "risk", "version")}
+    def _scope_hash(task: sqlite3.Row | dict) -> str:
+        """Binds an approval to the exact task: any change (incl. a new prompt → version bump) invalidates it."""
+        scope = {k: task[k] for k in ("id", "project_id", "title", "objective", "risk", "version", "scope")}
         return hashlib.sha256(json.dumps(scope, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
-    def transition(self, task_id: str, target: str, actor: str = "owner", cli: bool = True) -> str:
+    @staticmethod
+    def _valid_approval(con: sqlite3.Connection, task: sqlite3.Row, operation: str) -> sqlite3.Row | None:
+        """Unexpired, unrevoked, unexhausted, scope- and operation-bound. None = deny."""
+        return con.execute(
+            "SELECT * FROM approvals WHERE task_id=? AND scope_hash=? AND operation=? AND expires_at>? "
+            "AND revoked_at IS NULL AND use_count<max_uses ORDER BY created_at DESC LIMIT 1",
+            (task["id"], Store._scope_hash(task), operation, utcnow())).fetchone()
+
+    def consume_approval(self, con: sqlite3.Connection, task_id: str, operation: str, used_by: str,
+                         actor: str = "zenith-worker") -> str:
+        """Atomically spend one use of a valid approval inside the caller's write transaction."""
+        task = con.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if task is None:
+            raise ZenithError("Unknown task ID")
+        approval = self._valid_approval(con, task, operation)
+        if approval is None:
+            raise ZenithError(f"No valid approval for {operation} on this task scope "
+                              "(missing, expired, revoked, consumed, or the scope changed)")
+        now = utcnow()
+        cur = con.execute("UPDATE approvals SET use_count=use_count+1, used_at=?, used_by=? "
+                          "WHERE id=? AND use_count<max_uses AND revoked_at IS NULL", (now, used_by, approval["id"]))
+        if cur.rowcount != 1:
+            raise ZenithError("Approval could not be consumed (concurrent use)")
+        _record_event(con, "approval", approval["id"], "approval.consumed",
+                      {"task_id": task_id, "operation": operation, "used_by": used_by,
+                       "use_count": approval["use_count"] + 1, "max_uses": approval["max_uses"]}, actor)
+        return approval["id"]
+
+    def revoke_approval(self, approval_id: str, reason: str = "", actor: str = "owner") -> None:
+        if actor != "owner":
+            raise ZenithError("Only the owner may revoke approvals")
+        with self.write() as con:
+            row = con.execute("SELECT * FROM approvals WHERE id=?", (approval_id,)).fetchone()
+            if row is None:
+                raise ZenithError("Unknown approval ID")
+            if row["revoked_at"]:
+                raise ZenithError("Approval already revoked")
+            con.execute("UPDATE approvals SET revoked_at=?, revoke_reason=? WHERE id=?",
+                        (utcnow(), reason[:500], approval_id))
+            _record_event(con, "approval", approval_id, "approval.revoked",
+                          {"task_id": row["task_id"], "reason": reason[:500]}, actor)
+
+    def list_approvals(self, task_id: str) -> list[dict]:
+        with self.connection() as con:
+            return [dict(r) for r in con.execute("SELECT * FROM approvals WHERE task_id=? ORDER BY created_at", (task_id,))]
+
+    def bump_task_version(self, con: sqlite3.Connection, task_id: str, reason: str, actor: str) -> int:
+        """Plan drift: a new prompt or scope invalidates every earlier approval (scope hash changes)."""
+        cur = con.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
+        if cur.rowcount != 1:
+            raise ZenithError("Unknown task ID")
+        version = con.execute("SELECT version FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
+        _record_event(con, "task", task_id, "task.version_bumped", {"version": version, "reason": reason}, actor)
+        return version
+
+    def transition(self, task_id: str, target: str, actor: str = "owner", cli: bool = True,
+                   verification_evidence_id: str | None = None, reason: str | None = None,
+                   con: sqlite3.Connection | None = None) -> str:
+        """State transitions are made by code only. COMPLETED additionally needs a passing
+        TEST_VERIFICATION evidence row for the task's project (never a model claim)."""
         if target not in TRANSITIONS or (cli and target not in CLI_TRANSITIONS):
             raise ZenithError("Transition unavailable from CLI (execution requires verified worker)")
+        if con is not None:
+            return self._transition(con, task_id, target, actor, verification_evidence_id, reason)
         with self.write() as con:
+            return self._transition(con, task_id, target, actor, verification_evidence_id, reason)
+
+    def _transition(self, con, task_id, target, actor, verification_evidence_id, reason) -> str:
+        if True:
             task = con.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             if task is None:
                 raise ZenithError("Unknown task ID")
             previous = task["state"]
             if target not in TRANSITIONS[previous]:
                 raise ZenithError(f"Invalid transition: {previous} -> {target}")
+            if target == "COMPLETED":
+                ok = verification_evidence_id and con.execute(
+                    "SELECT 1 FROM evidence WHERE id=? AND project_id=? AND origin='TEST_VERIFICATION' "
+                    "AND json_extract(details,'$.passed')=1", (verification_evidence_id, task["project_id"])).fetchone()
+                if not ok:
+                    raise ZenithError("COMPLETED requires a passing TEST_VERIFICATION evidence id")
             if target == "QUEUED":
                 unfinished = [r[0] for r in con.execute(
                     "SELECT d.depends_on FROM task_dependencies d JOIN tasks t ON t.id=d.depends_on "
@@ -425,39 +532,114 @@ class Store:
                     raise ZenithError("Task is blocked by unfinished dependencies: " + ", ".join(unfinished))
                 # L0 deterministic work can queue with no model call. Other risks require
                 # an explicit, unexpired approval tied to the exact task scope.
-                if task["risk"] != "L0" or previous == "AWAITING_APPROVAL":
-                    scope = self._scope_hash(task)
-                    valid = con.execute(
-                        "SELECT id FROM approvals WHERE task_id=? AND scope_hash=? AND expires_at>? "
-                        "ORDER BY created_at DESC LIMIT 1",
-                        (task_id, scope, utcnow()),
-                    ).fetchone()
-                    if valid is None:
+                if task["risk"] != "L0" or previous in ("AWAITING_APPROVAL", "BLOCKED", "RECONCILE_REQUIRED"):
+                    if self._valid_approval(con, task, "task.execute") is None:
                         raise ZenithError("A valid scope-bound approval is required")
+            payload = {"from": previous, "to": target}
+            if reason:
+                payload["reason"] = reason[:500]
             con.execute("UPDATE tasks SET state=? WHERE id=?", (target, task_id))
-            _record_event(con, "task", task_id, "task.state_changed", {"from": previous, "to": target}, actor)
+            _record_event(con, "task", task_id, "task.state_changed", payload, actor)
         return target
 
-    def approve(self, task_id: str, actor: str = "owner", minutes: int = 60) -> str:
+    def approve(self, task_id: str, actor: str = "owner", minutes: int = 60,
+                operation: str = "task.execute", max_uses: int = 1) -> str:
+        """Owner grants one bounded, scope-hashed permission. Single-use unless max_uses > 1."""
         if not (1 <= minutes <= 1440):
             raise ZenithError("Approval lifetime must be 1–1440 minutes")
+        if operation not in APPROVAL_OPERATIONS:
+            raise ZenithError(f"Unknown operation {operation!r}")
+        if operation not in GRANTABLE_OPERATIONS:
+            raise ZenithError(f"{operation} is designed (REQ-002) but not grantable in this sprint")
+        if not (1 <= max_uses <= 10):
+            raise ZenithError("max_uses must be 1–10")
+        if actor != "owner":
+            raise ZenithError("Only the authenticated owner (local CLI) may grant approvals")
         with self.write() as con:
             task = con.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             if task is None:
                 raise ZenithError("Unknown task ID")
-            if task["state"] != "AWAITING_APPROVAL":
-                raise ZenithError("Task must be AWAITING_APPROVAL")
-            if actor != "owner":
-                raise ZenithError("Only authenticated owner (local CLI) may grant approval in Sprint-0")
+            if task["state"] not in ("AWAITING_APPROVAL", "BLOCKED", "RECONCILE_REQUIRED"):
+                raise ZenithError("Task must be AWAITING_APPROVAL (or BLOCKED / RECONCILE_REQUIRED for a retry)")
             approval_id = _uuid()
             expiry = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat(timespec="microseconds")
             con.execute(
-                "INSERT INTO approvals(id,task_id,scope_hash,actor,expires_at,created_at) VALUES (?,?,?,?,?,?)",
-                (approval_id, task_id, self._scope_hash(task), actor, expiry, utcnow()),
+                "INSERT INTO approvals(id,task_id,scope_hash,actor,expires_at,created_at,operation,project_id,max_uses) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (approval_id, task_id, self._scope_hash(task), actor, expiry, utcnow(), operation,
+                 task["project_id"], max_uses),
             )
             _record_event(con, "task", task_id, "task.approved",
-                          {"approval_id": approval_id, "expires_at": expiry}, actor)
+                          {"approval_id": approval_id, "operation": operation, "max_uses": max_uses,
+                           "scope_hash": self._scope_hash(task), "expires_at": expiry}, actor)
         return approval_id
+
+    # ---- artifacts and decisions (Engineering Director protocol persistence) --------------
+
+    def add_artifact(self, con: sqlite3.Connection, kind: str, payload: dict, project_id: str,
+                     task_id: str | None = None, run_id: str | None = None, parent_id: str | None = None,
+                     produced_by: str = "zenith", schema_version: str = "zenith.director.v1",
+                     actor: str = "zenith") -> str:
+        """Persist an immutable, digest-stamped protocol artifact inside the caller's transaction."""
+        artifact_id = _uuid()
+        stamped = {**payload, "artifact_id": artifact_id, "produced_by": produced_by,
+                   "created_at": utcnow(), "parent_id": parent_id}
+        body = json.dumps(stamped, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        dig = hashlib.sha256(body.encode()).hexdigest()
+        con.execute("INSERT INTO artifacts(id,seq,kind,schema_version,project_id,task_id,run_id,parent_id,"
+                    "produced_by,payload,digest,created_at) VALUES (?,(SELECT COALESCE(MAX(seq),0)+1 FROM artifacts),"
+                    "?,?,?,?,?,?,?,?,?,?)",
+                    (artifact_id, kind, schema_version, project_id, task_id, run_id, parent_id, produced_by,
+                     body, dig, stamped["created_at"]))
+        _record_event(con, "artifact", artifact_id, "artifact.recorded",
+                      {"kind": kind, "task_id": task_id, "run_id": run_id, "parent_id": parent_id,
+                       "produced_by": produced_by, "digest": dig}, actor)
+        return artifact_id
+
+    def get_artifact(self, artifact_id: str, verify: bool = True) -> dict:
+        with self.connection() as con:
+            row = con.execute("SELECT * FROM artifacts WHERE id=?", (artifact_id,)).fetchone()
+        if row is None:
+            raise ZenithError(f"Unknown artifact: {artifact_id}")
+        if verify and hashlib.sha256(row["payload"].encode()).hexdigest() != row["digest"]:
+            raise ZenithError(f"Artifact {artifact_id} failed its integrity check")
+        return {**dict(row), "payload": _load_json(row["payload"], "artifact")}
+
+    def list_artifacts(self, project_id: str | None = None, task_id: str | None = None,
+                       run_id: str | None = None, kind: str | None = None, limit: int = 100) -> list[dict]:
+        where, args = [], []
+        for col, val in (("project_id", project_id), ("task_id", task_id), ("run_id", run_id), ("kind", kind)):
+            if val:
+                where.append(f"{col}=?")
+                args.append(val)
+        sql = "SELECT id,seq,kind,schema_version,project_id,task_id,run_id,parent_id,produced_by,digest,created_at " \
+              "FROM artifacts" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY seq DESC LIMIT ?"
+        with self.connection() as con:
+            return [dict(r) for r in con.execute(sql, (*args, max(1, min(limit, 500))))]
+
+    def add_decision(self, project_id: str, decision: str, rationale: str, made_by: str = "owner",
+                     task_id: str | None = None, run_id: str | None = None, artifact_id: str | None = None,
+                     con: sqlite3.Connection | None = None) -> str:
+        decision_id = _uuid()
+
+        def _do(c):
+            c.execute("INSERT INTO decisions(id,project_id,task_id,run_id,artifact_id,decision,rationale,made_by,"
+                      "created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                      (decision_id, project_id, task_id, run_id, artifact_id, decision[:2000], rationale[:4000],
+                       made_by, utcnow()))
+            _record_event(c, "decision", decision_id, "decision.recorded",
+                          {"project_id": project_id, "task_id": task_id, "run_id": run_id, "made_by": made_by}, made_by)
+        if con is not None:
+            _do(con)
+        else:
+            with self.write() as c:
+                _do(c)
+        return decision_id
+
+    def list_decisions(self, project_id: str, limit: int = 50) -> list[dict]:
+        with self.connection() as con:
+            return [dict(r) for r in con.execute("SELECT * FROM decisions WHERE project_id=? ORDER BY created_at DESC LIMIT ?",
+                                                 (project_id, max(1, min(limit, 500))))]
 
     def events(self, limit: int = 20) -> list[dict]:
         with self.connection() as con:

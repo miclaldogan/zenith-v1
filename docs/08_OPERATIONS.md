@@ -41,6 +41,50 @@ Task state transitions are intentionally manual and execution is unavailable; **
 
 Exit codes: `0` ok · `2` validation/state error (`Zenith error: …`) · `3` database error such as `database is locked` after the 5 s busy timeout, or a malformed file (nothing was committed) · `130` interrupted.
 
+## Engineering runs (fake adapters only — no live model)
+```bash
+zenith sandbox doctor                                   # isolation baseline; ok must be true to execute anything
+zenith adapters                                         # discovered adapters, enablement, permissions
+zenith task add --project P --title "..." --risk L2 --allow 'src/**' --exclude 'tests/**' \
+   --acceptance "python -m unittest discover -s tests" [--artifact 'dist/*.whl']
+zenith director plan --task T                           # context → proposal + prompt artifacts; task PLANNED
+zenith task transition --id T --to AWAITING_APPROVAL
+zenith task approve --id T [--minutes 60] [--max-uses 1]   # single-use, scope-hashed task.execute
+zenith task transition --id T --to QUEUED
+zenith run create --task T [--max-attempts 3]           # idempotent
+zenith worker --run R                                   # lease + consume approval → implement → verify → review → finalize
+zenith run status --run R ; zenith run list ; zenith artifacts list --task T ; zenith artifacts show --id A ; zenith decisions --project P
+zenith run cancel --run R
+zenith worker --reconcile                               # expired leases → RECONCILE_REQUIRED (run after a crash/reboot)
+zenith task approve --id T && zenith run reconcile --run R --outcome retry --reason "..."   # or blocked|failed|cancelled
+zenith run accept --run R --reason "..."                # owner overrides reviewer disagreement; needs a passing verification
+zenith task revoke --approval A --reason "..."
+zenith demo poc [--scenario success|out_of_scope|false_claim|disagree|crash] [--dir DIR]   # throwaway repo + DB
+```
+Run outcomes: `COMPLETED` (verified and reviewed), `BLOCKED/correction_required` (verification failed; a revised prompt was persisted; approve again and re-queue to retry), `BLOCKED/reviewer_disagreement` (verified, director wants changes; `run accept` or retry), `BLOCKED/review_unavailable`, `FAILED/attempts_exhausted`, `CANCELLED`, `RECONCILE_REQUIRED` (crash or lost lease; worktree kept under `$ZENITH_STATE_DIR/worktrees/<run>` for inspection; the source stays locked until reconciled). State dir: `ZENITH_STATE_DIR` or `~/.local/state/zenith`. Worktree registration writes to the source repository's `.git/worktrees/` (Git metadata only); the primary working tree is never modified.
+
+## Live provider adapters (prepared; disabled by default)
+```bash
+zenith adapters list                                   # 6 adapters: 2 fake (enabled), 4 live (disabled until named below)
+export ZENITH_ENABLED_ADAPTERS=claude-code-director,claude-code-implementer   # explicit enablement per adapter
+export ZENITH_CLAUDE_OAUTH_TOKEN_FILE=~/.config/zenith/claude_token          # subscription: token from `claude setup-token`, 0600
+#   or: export ZENITH_ANTHROPIC_API_KEY_FILE=~/.config/zenith/anthropic_api_key  # API key (Console billing) -> --bare
+# Zenith never reads either file; the sandbox forwarder hands it to the CLI as an environment variable.
+export ZENITH_CODEX_AUTH_FILE=~/.codex/auth.json                              # owner's explicit choice
+zenith adapters probe --adapter claude-code-director [--version-check]        # preflight, exact argv, blockers; no model call
+zenith smoke --adapter codex-director --repo /tmp/disposable                  # preflight only
+ZENITH_LIVE_SMOKE_ACK=I-AUTHORIZE-ONE-LIVE-PROVIDER-CALL zenith smoke --adapter codex-director --repo /tmp/disposable --authorize-live-call
+zenith smoke --adapter claude-code-director --implementer claude-code-implementer --full          # preflight + authorization request
+ZENITH_LIVE_SMOKE_ACK=... zenith smoke --adapter claude-code-director --implementer claude-code-implementer --full --authorize-live-call --max-budget-usd 0.25
+zenith identity show                                   # REQ-004: ids, display names, roles, signature, co-authors
+zenith identity commit-preview --subject "..." [--body "..."] [--assistant-contributed]   # preview only; no commit
+zenith director plan --task T --director codex-director                      # once enabled and authenticated
+zenith worker --run R --director codex-director --implementer claude-code-implementer
+```
+Director context: directors never see the repository — only Zenith's documents, a name/size listing and the files named in the task's `context_files` globs (`zenith task add … --context 'src/**'` is not yet a flag; pass `scope` via the API or edit the task scope). Worktrees containing credential-like files are refused.
+
+Optional tuning: `ZENITH_CLAUDE_BIN`, `ZENITH_CODEX_BIN`, `ZENITH_CLAUDE_ALLOWED_HOSTS`, `ZENITH_CODEX_ALLOWED_HOSTS`, `ZENITH_CLAUDE_CODE_MODEL`, `ZENITH_CODEX_MODEL`, `ZENITH_MAX_BUDGET_USD`. Full smoke procedure and pass criteria: `plans/SPRINT_2_5_READINESS.md` §6. Failure kinds in `run_events`/exit reasons: `auth`, `invalid_output`, `timeout`, `connection`, `interrupted`, `policy_violation`, `unsupported`, `budget`, `cancelled`, `crash`.
+
 ## Evidence semantics (what the labels mean)
 | Origin | Confidence | Produced by |
 |---|---|---|
