@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sqlite3
 import sys
 from .kernel import MANUAL_EVIDENCE_ORIGINS, Store, ZenithError
 from . import __version__
@@ -114,9 +115,15 @@ def main() -> None:
         if args.cmd == "init":
             output({"db_path": store.init(), "initialized": True})
         elif args.cmd == "doctor":
+            version = store.schema_version()
+            from .migrations import LATEST_VERSION
+            overlaps = store.source_overlaps() if version == LATEST_VERSION else None
             output({"database_exists": store.db_path.exists(),
                     "db_path": str(store.db_path),
-                    "schema_version": store.schema_version(),
+                    "schema_version": version, "schema_expected": LATEST_VERSION,
+                    "schema_action": (None if version in (None, LATEST_VERSION)
+                                      else "run `zenith init` to upgrade (backup is written first)"),
+                    "source_overlaps": overlaps,
                     "tools": {x: bool(shutil.which(x)) for x in ("git", "tmux", "hyprctl", "claude", "codex")},
                     "note": "Tool presence is not proof of authentication or permission."})
         elif args.cmd == "project":
@@ -182,6 +189,13 @@ def main() -> None:
     except (ZenithError, OSError, ValueError) as exc:
         print(f"Zenith error: {exc}", file=sys.stderr)
         sys.exit(2)
+    except sqlite3.Error as exc:
+        # e.g. "database is locked" after busy_timeout, or a malformed file. Nothing was committed.
+        print(f"Zenith database error: {exc}", file=sys.stderr)
+        sys.exit(3)
+    except KeyboardInterrupt:
+        print("Zenith: interrupted; no partial writes were committed", file=sys.stderr)
+        sys.exit(130)
 
 
 if __name__ == "__main__":

@@ -23,3 +23,4 @@ S1-01 → S1-02 → S1-03/S1-04 → S1-05/S1-07 → S1-06/S1-08 → S1-09/S1-10.
 - S1-06: only `zenith task list` filters ("read-only due listing"); no reminders.
 - S1-09: no CLI `restore`; restore is documented as pointing `ZENITH_DB_PATH` at a backup.
 - Optional Textual TUI from the roadmap was not built.
+- **Acceptance pass (schema v3):** nested sources refused, events immutable, evidence `seq`, microsecond timestamps, allowlist at scan time, `scripts/test.sh`. Full record: `SPRINT_1_ACCEPTANCE.md`.

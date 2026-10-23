@@ -9,6 +9,6 @@
 7. No automatic push, deployment, deletion or broad chmod/chown operations. Use isolated Git worktrees for agent writes.
 8. Do not read `.env`, SSH keys, browser profiles, credentials, or private data by default. Add path allowlists and redaction.
 9. Use event-store records and state transitions for important mutations; persist task/approval history before side effects.
-10. Each change must have tests and acceptance evidence. Run `python -m unittest discover -s tests -v`.
+10. Each change must have tests and acceptance evidence. Run `scripts/test.sh` (equivalent to `python -m unittest discover -s tests -v` inside the project venv, or with `PYTHONPATH=src` from a bare checkout).
 11. Keep dependencies small. No queue cluster or cloud deployment until tested local single-node MVP.
 12. Return a concise implementation report: changed files, tests, remaining gaps, decisions and security implications.

@@ -8,16 +8,18 @@ Zenith is an independent personal project intelligence and multi-agent orchestra
 
 ## What works (Sprint 0 + Sprint 1)
 
-- SQLite-backed registry and append-only event log; numbered schema migrations (now v2) with an automatic backup before any upgrade and rollback on failure.
-- Projects with a stable ID and **many sources** (directories). Paths can be added, moved and detached without changing project or task IDs; a directory can belong to only one project.
+- SQLite-backed registry and append-only event log; numbered schema migrations (now **v3**) with an automatic backup before any upgrade and rollback on failure. Events and evidence are protected by database triggers against edits and deletes from ordinary application code (not against a privileged local user).
+- Projects with a stable ID and **many sources** (directories). Paths can be added, moved and detached without changing project or task IDs; a directory can belong to only one source and sources never nest (parent/child paths are refused, in code and by trigger).
 - Read-only metadata scanner: Git branch/HEAD/tracked-change count plus a file-metadata fingerprint (path, size, mtime — never contents). Symlinks are never followed; `.env`, keys, credentials and `.ssh`-style directories are skipped and only counted. Bounded by file count (20 000) and time (10 s).
 - Snapshot comparison: repeated identical scans are deduplicated; `project sources diff` shows the actual HEAD change (with commit count) or "files changed without a commit".
-- Evidence ledger with provenance (`HUMAN_REPORT`, `REPOSITORY_OBSERVATION`, `TEST_VERIFICATION`, `DOCUMENT`, `MODEL_INFERENCE`), observation time, node and confidence. Confidence is derived from origin in code and constrained in the database; rows are append-only. The CLI can only attach `HUMAN_REPORT`, `DOCUMENT` and `MODEL_INFERENCE`.
+- Evidence ledger with provenance (`HUMAN_REPORT`, `REPOSITORY_OBSERVATION`, `TEST_VERIFICATION`, `DOCUMENT`, `MODEL_INFERENCE`), observation time, node, confidence and a gap-free recording sequence. Confidence is derived from origin in code and constrained in the database; rows are append-only. Timestamps are microsecond UTC. The CLI can only attach `HUMAN_REPORT`, `DOCUMENT` and `MODEL_INFERENCE`.
 - Check-ins (`zenith checkin`) are stored as `REPORTED`, redacted for obvious credentials, and reconciled against later evidence when back-dated from another machine.
 - Tasks: deadlines (stored UTC, shown in Europe/Istanbul; a bare date means end of that day), dependencies (a task with unfinished dependencies cannot be queued; cycles rejected), and filtered listings (`--open --overdue --due-within --blocked --state`).
 - `zenith brief`: deterministic, evidence-cited status (`UNKNOWN`, `REPORTED_ONLY`, `OBSERVED`, `VERIFIED`, `VERIFICATION_STALE`, `VERIFICATION_FAILING`) with unknowns and next actions. No model, no network.
 - `zenith backup --out FILE` using the SQLite backup API (never overwrites).
 - Stdlib-only; offline tests; no network or automatic code execution.
+
+Sprint 1 acceptance audit and hardening record: [`docs/plans/SPRINT_1_ACCEPTANCE.md`](docs/plans/SPRINT_1_ACCEPTANCE.md). Sprint 2 plan (not implemented): [`docs/plans/SPRINT_2_PLAN.md`](docs/plans/SPRINT_2_PLAN.md).
 
 **Not implemented:** agent execution, test execution (so nothing can reach `VERIFIED` through the CLI yet — `record_test_verification` is library plumbing for Sprint 2's deterministic verifier), TUI, MCP, Gmail, Calendar, Telegram, remote Hub/Node sync, tmux automation, Hyprland window management, autonomous planning. Never claim they are functional.
 
@@ -40,12 +42,12 @@ zenith checkin --project <project-id> --note "what I did"
 zenith brief --format text
 zenith task add --project <project-id> --title 'Review architecture' --risk L1
 zenith task list
-python -m unittest discover -s tests -v
+scripts/test.sh
 ```
 
-Alternatively, `bash scripts/bootstrap.sh` runs setup and tests without launching external agents. For a completely dependency-free first check, use `PYTHONPATH=src python -m zenith doctor`; the test suite likewise needs `PYTHONPATH=src` unless the package is installed (`PYTHONPATH=src python -m unittest discover -s tests -v`).
+Alternatively, `bash scripts/bootstrap.sh` runs setup and tests without launching external agents (it needs network once, to fetch setuptools for the editable install). `scripts/test.sh` works from a clean checkout with **no installation and no network**: it uses `.venv` when present and otherwise runs straight from `src/`. For a dependency-free first check, `PYTHONPATH=src python -m zenith doctor`.
 
-The SQLite database defaults to `${XDG_DATA_HOME:-~/.local/share}/zenith/zenith.db`. Override with `ZENITH_DB_PATH=/path/to/zenith.db`. Zenith does not modify registered projects. If you upgrade from a Sprint-0 database, run `zenith init` once: it backs the database up (`zenith.db.pre-v2-<time>.bak`) and migrates it in place.
+The SQLite database defaults to `${XDG_DATA_HOME:-~/.local/share}/zenith/zenith.db`. Override with `ZENITH_DB_PATH=/path/to/zenith.db`. Zenith does not modify registered projects. If you upgrade from an older database, `zenith doctor` says so; run `zenith init` once: it backs the database up (`zenith.db.pre-v<N>-<time>.bak`) and migrates it in place. See `docs/08_OPERATIONS.md` for the rollback procedure.
 
 ## Handoff to your local coding agent
 

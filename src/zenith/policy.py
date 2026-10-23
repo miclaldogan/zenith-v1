@@ -29,16 +29,44 @@ _SENSITIVE_PATTERNS = (
 )
 
 
-def sensitive_reason(name: str, is_dir: bool = False) -> str | None:
-    """Return why a directory entry must be excluded from scans, or None if it is allowed.
+# Patterns that are only *hints* (a source file called secrets.py is usually code). For the
+# metadata scanner, which never opens files and never records names, such files are ordinary.
+# Any future reader of file *contents* must call sensitive_reason(..., strict=True).
+_HINT_PATTERNS = frozenset({"*secret*", "*credential*"})
+_CODE_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".kt",
+                            ".rb", ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".swift", ".php", ".md", ".rst"})
 
-    Excluded entries are neither opened nor stat'ed; only a per-reason counter is kept.
+
+def sensitive_reason(name: str, is_dir: bool = False, strict: bool = True) -> str | None:
+    """Return why a directory entry must be excluded, or None if it is allowed.
+
+    strict=True (default, required for anything that could read contents) excludes every
+    credential-like name. strict=False is for the metadata-only scanner and lets a *code* file
+    whose name merely contains "secret"/"credential" count in the fingerprint; .env, keys,
+    stores and credential directories are excluded in both modes. Excluded entries are
+    neither opened nor stat'ed; only a per-reason counter is kept.
     """
     lowered = name.lower()
     if is_dir:
         return "sensitive_dir" if lowered in SENSITIVE_DIR_NAMES else None
-    if lowered in _SENSITIVE_EXACT or any(fnmatch.fnmatchcase(lowered, p) for p in _SENSITIVE_PATTERNS):
+    if lowered in _SENSITIVE_EXACT:
         return "sensitive_file"
+    for pattern in _SENSITIVE_PATTERNS:
+        if fnmatch.fnmatchcase(lowered, pattern):
+            if not strict and pattern in _HINT_PATTERNS and Path(lowered).suffix in _CODE_SUFFIXES:
+                continue
+            return "sensitive_file"
+    return None
+
+
+def path_relation(a: str, b: str) -> str | None:
+    """'same', 'is inside', 'contains' or None for two canonical absolute paths."""
+    if a == b:
+        return "same"
+    if a.startswith(b.rstrip("/") + "/"):
+        return "is inside"
+    if b.startswith(a.rstrip("/") + "/"):
+        return "contains"
     return None
 
 

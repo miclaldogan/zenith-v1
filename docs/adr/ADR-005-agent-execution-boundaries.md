@@ -1,0 +1,10 @@
+# ADR-005 — Agent execution boundaries (adapter interface, worktree vs sandbox, verifier authority)
+**Proposed 2026-10-23 (Sprint 2 preparation; needs owner acceptance before S2-06).**
+
+1. **Adapter boundary.** Model providers are reached only through `AgentAdapter` implementations that take an `AgentRequest` and return events and an `AgentResult` *claim*. Adapters never touch task state, approvals or evidence; the orchestrator never parses provider-specific output. A `FakeAgentAdapter` with a fixture corpus is the first and, for Sprint 2, the only adapter.
+2. **Worktree ≠ sandbox.** A dedicated Git worktree isolates *what the agent is allowed to change* (diff scope, primary tree untouched). It does **not** isolate *what the agent's processes can do*: repository tests and build scripts are arbitrary code. Repository commands therefore run under an OS-level profile (`bwrap` preferred, `systemd-run --user` fallback) with a sanitized environment, resource limits and no network for verification; without a profile, execution is refused unless the owner opts in per project and the opt-in is recorded as an event.
+3. **Verifier authority.** Only the deterministic verifier produces `TEST_VERIFICATION`; it compares exit codes, diff scope, artifacts and revision, never model text. Reviewer output is `MODEL_INFERENCE` and advisory.
+4. **Crash semantics.** A lost lease or dead worker moves the task to a new `RECONCILE_REQUIRED` state (owner-resolved). Started side effects are never re-executed automatically; retries are explicit and re-approved if the scope hash changed.
+5. **Approval consumption.** An approval is consumed (`used_at`) in the same transaction as the worker lease; it cannot satisfy two runs.
+
+**Consequences:** adds one task state and four tables (schema v4); live Claude Code / Codex adapters are a separate, later decision gated on the fake-adapter POC and explicit owner authorization; nothing in Sprint 2 may obtain `L3`/`L4` capabilities.

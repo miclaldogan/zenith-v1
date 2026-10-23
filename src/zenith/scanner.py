@@ -54,7 +54,7 @@ def scan_tree(root: Path, max_files: int = MAX_FILES, max_seconds: float = MAX_S
                         counts["symlinks_escaping_root"] += 1
                     continue
                 is_dir = entry.is_dir(follow_symlinks=False)
-                if sensitive_reason(entry.name, is_dir):
+                if sensitive_reason(entry.name, is_dir, strict=False):
                     counts["sensitive"] += 1
                     continue
                 if is_dir:
@@ -101,7 +101,7 @@ def git_metadata(path: Path) -> dict:
                       git_root_outside_source=Path(root).resolve() != path.resolve())
         branch = _git(path, "branch", "--show-current")
         head = _git(path, "rev-parse", "HEAD")
-        status = _git(path, "status", "--porcelain", "--untracked-files=no")
+        status = _git(path, "status", "--porcelain", "--untracked-files=no", "--", ".")
         last = _git(path, "log", "-1", "--format=%cI")
         result["branch"] = branch.stdout.strip() if branch.returncode == 0 else None
         result["head"] = head.stdout.strip() if head.returncode == 0 else None

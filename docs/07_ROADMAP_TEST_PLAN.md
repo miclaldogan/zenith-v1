@@ -30,8 +30,10 @@
 
 **Gate:** test sources with fake API fixtures; expired tokens handled, protected emails aren't leaked to cloud by default, offline node events reconcile without duplicate task execution.
 
-## Later: Research Intelligence
-See `09_RESEARCH_BACKLOG.md`. No deep-research automation in kernel MVP.
+## Later: Research Intelligence and optional integrations
+See `09_RESEARCH_BACKLOG.md`. No deep-research automation in kernel MVP. Also deferred, not dropped: Claude Remote Control as an optional future integration (behind the same adapter boundary and approval gates as any other provider surface).
+
+Sprint 1 acceptance record: `plans/SPRINT_1_ACCEPTANCE.md`. Sprint 2 engineering plan: `plans/SPRINT_2_PLAN.md`.
 
 ## Test pyramid
 - Unit: state transitions, scope hashes, ID validation, path allowlists, timezone conversion, dedupe, provider event parsing.

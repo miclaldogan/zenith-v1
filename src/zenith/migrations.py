@@ -112,10 +112,40 @@ def _m002_verified_project_memory(con: sqlite3.Connection) -> None:
     con.execute("CREATE INDEX idx_tasks_due ON tasks(due_at)")
 
 
+def _m003_integrity_and_ordering(con: sqlite3.Connection) -> None:
+    """Sprint 1 hardening: immutable events, gap-free evidence order, no nested sources."""
+    # Events are the audit log: ordinary application code must not be able to rewrite them.
+    con.execute("CREATE TRIGGER events_no_update BEFORE UPDATE ON events "
+                "BEGIN SELECT RAISE(ABORT,'events are append-only'); END")
+    con.execute("CREATE TRIGGER events_no_delete BEFORE DELETE ON events "
+                "BEGIN SELECT RAISE(ABORT,'events are append-only'); END")
+
+    # Stable, gap-free recording order for evidence (rowid is not stable across VACUUM).
+    con.execute("DROP TRIGGER IF EXISTS evidence_only_reconfirm")
+    con.execute("ALTER TABLE evidence ADD COLUMN seq INTEGER")
+    con.execute("UPDATE evidence SET seq=rowid")
+    con.execute("CREATE UNIQUE INDEX idx_evidence_seq ON evidence(seq)")
+    changed = " OR ".join(f"NEW.{c} IS NOT OLD.{c}" for c in (*_EVIDENCE_COLUMNS, "seq"))
+    con.execute(f"CREATE TRIGGER evidence_only_reconfirm BEFORE UPDATE ON evidence WHEN {changed} "
+                "BEGIN SELECT RAISE(ABORT,'evidence is append-only'); END")
+    con.execute("CREATE TRIGGER evidence_seq_required BEFORE INSERT ON evidence WHEN NEW.seq IS NULL "
+                "BEGIN SELECT RAISE(ABORT,'evidence.seq must be assigned'); END")
+
+    # A directory belongs to at most one active source and sources never nest (fail closed).
+    overlap = ("EXISTS (SELECT 1 FROM project_sources s WHERE s.removed_at IS NULL AND s.id<>NEW.id "
+               "AND s.node_id=NEW.node_id AND (s.path=NEW.path "
+               "OR substr(NEW.path,1,length(s.path)+1)=s.path||'/' "
+               "OR substr(s.path,1,length(NEW.path)+1)=NEW.path||'/'))")
+    for when, name in (("INSERT", "sources_no_overlap_insert"), ("UPDATE OF path", "sources_no_overlap_update")):
+        con.execute(f"CREATE TRIGGER {name} BEFORE {when} ON project_sources WHEN NEW.removed_at IS NULL AND {overlap} "
+                    "BEGIN SELECT RAISE(ABORT,'source path overlaps an existing source'); END")
+
+
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 MIGRATIONS: list[Migration] = [
     (1, "sprint0_baseline", _m001_baseline),
     (2, "sprint1_verified_project_memory", _m002_verified_project_memory),
+    (3, "sprint1_hardening_integrity_and_ordering", _m003_integrity_and_ordering),
 ]
 LATEST_VERSION = MIGRATIONS[-1][0]
 
@@ -140,12 +170,19 @@ def backup_database(db_path: Path, dest: Path) -> Path:
             src.backup(out)
             if out.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                 raise MigrationError("Backup failed its integrity check")
+        except BaseException:
+            out.close()
+            dest.unlink(missing_ok=True)  # only the file this call was writing; never a prior backup
+            raise
         finally:
             out.close()
     finally:
         src.close()
     dest.chmod(0o600)
     return dest
+
+
+_BEFORE_COMMIT_HOOK: Callable[[int], None] | None = None  # tests only: simulate a crash before COMMIT
 
 
 def apply_pending(db_path: Path, migrations: list[Migration] | None = None, backup: bool = True) -> dict:
@@ -155,6 +192,7 @@ def apply_pending(db_path: Path, migrations: list[Migration] | None = None, back
     with foreign keys off (required for table rebuilds), is checked with `foreign_key_check`,
     and is rolled back as a unit on any error, leaving the previous version and the backup.
     """
+    db_path = Path(db_path)
     migrations = MIGRATIONS if migrations is None else migrations
     latest = migrations[-1][0]
     con = sqlite3.connect(str(db_path), timeout=5, isolation_level=None)
@@ -185,6 +223,8 @@ def apply_pending(db_path: Path, migrations: list[Migration] | None = None, back
                             (str(version),))
                 if con.execute("PRAGMA foreign_key_check").fetchall():
                     raise MigrationError("foreign key violations after migration")
+                if _BEFORE_COMMIT_HOOK is not None:
+                    _BEFORE_COMMIT_HOOK(version)
                 con.execute("COMMIT")
             except BaseException as exc:
                 if con.in_transaction:

@@ -4,7 +4,6 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -78,7 +77,7 @@ class MigrationTests(Base):
         self.assertEqual(con.execute("SELECT source_id IS NOT NULL, seen_count FROM snapshots").fetchone(), (1, 1))
         self.assertEqual(con.execute("SELECT count(*) FROM events WHERE event_type='schema.migrated'").fetchone()[0], 1)
         self.assertEqual(con.execute("PRAGMA foreign_key_check").fetchall(), [])
-        backups = list(self.root.glob("legacy.db.pre-v2-*.bak"))
+        backups = list(self.root.glob("legacy.db.pre-v*.bak"))
         self.assertEqual(len(backups), 1)
         old = sqlite3.connect(backups[0])  # the backup is the untouched v1 database
         self.assertEqual(migrations.current_version(old), 1)
@@ -111,14 +110,15 @@ class MigrationTests(Base):
         self.assertEqual(Store(path).get_project("p1")["name"], "Legacy")
 
     def test_later_failed_migration_leaves_previous_version(self):
-        def v3(con):
+        def bad(con):
             con.execute("CREATE TABLE half_done (x)")
             raise RuntimeError("nope")
 
+        nxt = migrations.LATEST_VERSION + 1
         with self.assertRaises(migrations.MigrationError):
-            migrations.apply_pending(self.store.db_path, migrations=[*migrations.MIGRATIONS, (3, "bad", v3)])
+            migrations.apply_pending(self.store.db_path, migrations=[*migrations.MIGRATIONS, (nxt, "bad", bad)])
         con = sqlite3.connect(self.store.db_path)
-        self.assertEqual(migrations.current_version(con), 2)
+        self.assertEqual(migrations.current_version(con), migrations.LATEST_VERSION)
         self.assertIsNone(con.execute("SELECT 1 FROM sqlite_master WHERE name='half_done'").fetchone())
 
     def test_refuses_downgrade(self):
@@ -379,10 +379,11 @@ class EvidenceTests(Base):
 
     def test_database_enforces_confidence_ceiling(self):
         con = sqlite3.connect(self.store.db_path)
-        row = ("e1", self.project, None, None, "HUMAN_REPORT", "VERIFIED", "s", None, None, "{}", "local",
-               "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00")
+        row = ("e1", self.project, "HUMAN_REPORT", "VERIFIED", "s", "2026-01-01T00:00:00+00:00",
+               "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00", 1)
         with self.assertRaises(sqlite3.IntegrityError):
-            con.execute("INSERT INTO evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+            con.execute("INSERT INTO evidence(id,project_id,origin,confidence,summary,observed_at,"
+                        "last_confirmed_at,recorded_at,seq) VALUES (?,?,?,?,?,?,?,?,?)", row)
 
     def test_evidence_is_append_only(self):
         e = self.store.add_evidence(self.project, "HUMAN_REPORT", "note")["evidence_id"]
@@ -548,7 +549,6 @@ class BriefTests(Base):
         self.assertEqual(b["latest_human_report"]["confidence"], "REPORTED")
         self.assertFalse(b["latest_human_report"]["verified"])
         # New commit: the earlier verification no longer covers the current revision.
-        time.sleep(1.1)  # timestamps have 1 s resolution; "newer" is strictly later
         commit(self.repo, "new.txt")
         self.store.scan_source(self.source)
         b = self.status()

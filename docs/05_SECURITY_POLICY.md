@@ -26,6 +26,8 @@ UI suggestion is not permission. Telegram buttons must reference one task ID, sc
 | Compromised remote node | Node-scoped tokens, revocation, capability and project permissions |
 | Duplicate task on crash | idempotency key, durable leases and reconciliation; no blind retry |
 | Misleading progress report | event/evidence ledger, provenance labels, independent verification |
+| Tampering with the local ledger | `events`/`evidence` append-only triggers stop ordinary code paths; **not** cryptographic — a privileged local user can drop them. Tamper-evidence (hash chaining, remote copies) is a Hub-era item |
+| Ambiguous path ownership | one active source per directory, no nesting (code + trigger), allowlist re-checked at scan time |
 | Overly broad Google scopes | OAuth least privilege, read-only first, write scopes require explicit escalation |
 | Log retention leaks | Redact, encrypt remote backups, cap log size, configurable TTL |
 

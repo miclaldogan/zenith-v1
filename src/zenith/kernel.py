@@ -49,7 +49,9 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 def utcnow() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    """Microsecond UTC. Lexicographic order of these strings equals chronological order,
+    also against the second-resolution values written before schema v3."""
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def default_db_path() -> Path:
@@ -73,7 +75,20 @@ def _record_event(con: sqlite3.Connection, kind: str, aggregate_id: str, event_t
     )
 
 
+def _load_json(text: str, what: str) -> dict:
+    """Stored JSON must parse; a corrupt record is reported, never guessed."""
+    try:
+        value = json.loads(text)
+    except (TypeError, ValueError) as exc:
+        raise ZenithError(f"Corrupt {what} record in database: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ZenithError(f"Corrupt {what} record in database: not an object")
+    return value
+
+
 class Store:
+    BUSY_TIMEOUT_MS = 5000  # how long a writer waits for another writer before failing
+
     def __init__(self, db_path: Path | str | None = None):
         self.db_path = Path(db_path or default_db_path()).expanduser()
 
@@ -81,11 +96,12 @@ class Store:
     def connection(self) -> Iterator[sqlite3.Connection]:
         if not self.db_path.exists():
             raise ZenithError("Database not initialized. Run `zenith init`.")
-        con = sqlite3.connect(str(self.db_path), timeout=5)
+        # Autocommit mode: reads never hold a transaction; writes go through `write()`.
+        con = sqlite3.connect(str(self.db_path), timeout=self.BUSY_TIMEOUT_MS / 1000, isolation_level=None)
         try:
             con.row_factory = sqlite3.Row
             con.execute("PRAGMA foreign_keys=ON")
-            con.execute("PRAGMA busy_timeout=5000")
+            con.execute(f"PRAGMA busy_timeout={int(self.BUSY_TIMEOUT_MS)}")
             version = migrations.current_version(con)
             if version != migrations.LATEST_VERSION:
                 raise ZenithError(f"Database schema is v{version}, this Zenith needs "
@@ -94,6 +110,19 @@ class Store:
             yield con
         finally:
             con.close()
+
+    @contextmanager
+    def write(self) -> Iterator[sqlite3.Connection]:
+        """One write transaction. BEGIN IMMEDIATE takes the write lock *before* the reads a
+        check-then-write method performs, so two processes cannot both pass the same check."""
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                yield con
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
+            con.execute("COMMIT")
 
     def init(self) -> str:
         """Create the database or upgrade it in place (backup first, rollback on failure)."""
@@ -107,7 +136,7 @@ class Store:
             raise ZenithError(str(exc)) from exc
         self.db_path.chmod(0o600)
         if outcome["from"] != outcome["to"]:
-            with self.connection() as con, con:
+            with self.write() as con:
                 _record_event(con, "system", "schema", "schema.migrated",
                               {"from": outcome["from"], "to": outcome["to"],
                                "backup": Path(outcome["backup"]).name if outcome["backup"] else None},
@@ -135,7 +164,7 @@ class Store:
             migrations.backup_database(self.db_path, dest)
         except migrations.MigrationError as exc:
             raise ZenithError(str(exc)) from exc
-        with self.connection() as con, con:
+        with self.write() as con:
             _record_event(con, "system", "database", "db.backup_created",
                           {"file": dest.name, "bytes": dest.stat().st_size}, actor="zenith")
         return str(dest)
@@ -150,10 +179,25 @@ class Store:
             raise ZenithError(str(exc)) from exc
 
     @staticmethod
-    def _claim_path(con: sqlite3.Connection, path: Path, node_id: str = "local") -> None:
-        if con.execute("SELECT 1 FROM project_sources WHERE node_id=? AND path=? AND removed_at IS NULL",
-                       (node_id, str(path))).fetchone():
-            raise ZenithError("That directory is already registered to a project")
+    def _claim_path(con: sqlite3.Connection, path: Path, node_id: str = "local",
+                    ignore_source: str | None = None) -> None:
+        """Fail closed: a directory may belong to one source, and sources may not nest.
+
+        Nesting (parent/child) is refused across *and* within projects because two owners of
+        the same files make ownership ambiguous and double-count observations. The same rule
+        is enforced by a database trigger (schema v3), which also closes the race between
+        two concurrent writers.
+        """
+        for row in con.execute("SELECT id, path, project_id FROM project_sources "
+                               "WHERE node_id=? AND removed_at IS NULL", (node_id,)):
+            if row["id"] == ignore_source:
+                continue
+            relation = policy.path_relation(str(path), row["path"])
+            if relation == "same":
+                raise ZenithError("That directory is already registered to a project")
+            if relation:
+                raise ZenithError(f"Path {relation} an existing source ({row['path']}); "
+                                  "nested sources are refused to keep ownership unambiguous")
 
     def add_project(self, name: str, path: str, category: str = "personal") -> str:
         name = name.strip()
@@ -161,17 +205,25 @@ class Store:
             raise ZenithError("Project name must be 1–200 characters")
         p = self._vet_path(path)
         project_id, source_id = _uuid(), _uuid()
-        with self.connection() as con, con:
+        with self.write() as con:
             self._claim_path(con, p)
             now = utcnow()
             con.execute("INSERT INTO projects(id,name,category,created_at) VALUES (?,?,?,?)",
                         (project_id, name, category, now))
-            con.execute("INSERT INTO project_sources(id,project_id,path,added_at) VALUES (?,?,?,?)",
-                        (source_id, project_id, str(p), now))
+            self._insert_source(con, source_id, project_id, p, None, now)
             _record_event(con, "project", project_id, "project.created", {"name": name, "path": str(p)})
             _record_event(con, "project_source", source_id, "source.added",
                           {"project_id": project_id, "path": str(p)})
         return project_id
+
+    @staticmethod
+    def _insert_source(con: sqlite3.Connection, source_id: str, project_id: str, p: Path,
+                       label: str | None, now: str) -> None:
+        try:
+            con.execute("INSERT INTO project_sources(id,project_id,path,label,added_at) VALUES (?,?,?,?,?)",
+                        (source_id, project_id, str(p), label, now))
+        except sqlite3.IntegrityError as exc:  # unique index / overlap trigger: second line of defence
+            raise ZenithError(f"Path conflicts with an existing source: {exc}") from exc
 
     def _project_row(self, con: sqlite3.Connection, project_id: str) -> dict:
         r = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
@@ -208,11 +260,10 @@ class Store:
             raise ZenithError("Source label must be at most 100 characters")
         p = self._vet_path(path)
         source_id = _uuid()
-        with self.connection() as con, con:
+        with self.write() as con:
             self._project_row(con, project_id)
             self._claim_path(con, p)
-            con.execute("INSERT INTO project_sources(id,project_id,path,label,added_at) VALUES (?,?,?,?,?)",
-                        (source_id, project_id, str(p), label, utcnow()))
+            self._insert_source(con, source_id, project_id, p, label, utcnow())
             _record_event(con, "project_source", source_id, "source.added",
                           {"project_id": project_id, "path": str(p), "label": label})
         return source_id
@@ -227,7 +278,7 @@ class Store:
 
     def remove_source(self, source_id: str) -> str:
         """Detach a source from its project. History is kept; the directory is never touched."""
-        with self.connection() as con, con:
+        with self.write() as con:
             src = self._source_row(con, source_id)
             con.execute("UPDATE project_sources SET removed_at=? WHERE id=?", (utcnow(), source_id))
             _record_event(con, "project_source", source_id, "source.removed",
@@ -237,12 +288,15 @@ class Store:
     def move_source(self, source_id: str, new_path: str) -> dict:
         """Point an existing source at a new directory; project and source IDs stay stable."""
         p = self._vet_path(new_path)
-        with self.connection() as con, con:
+        with self.write() as con:
             src = self._source_row(con, source_id)
             if src["path"] == str(p):
                 raise ZenithError("Source already points at that path")
-            self._claim_path(con, p, src["node_id"])
-            con.execute("UPDATE project_sources SET path=? WHERE id=?", (str(p), source_id))
+            self._claim_path(con, p, src["node_id"], ignore_source=source_id)
+            try:
+                con.execute("UPDATE project_sources SET path=? WHERE id=?", (str(p), source_id))
+            except sqlite3.IntegrityError as exc:
+                raise ZenithError(f"Path conflicts with an existing source: {exc}") from exc
             _record_event(con, "project_source", source_id, "source.moved",
                           {"project_id": src["project_id"], "from": src["path"], "to": str(p)})
         return {"source_id": source_id, "project_id": src["project_id"], "path": str(p)}
@@ -262,7 +316,7 @@ class Store:
             except ValueError as exc:
                 raise ZenithError("due_at must be ISO 8601 (e.g. 2026-11-01)") from exc
         task_id = _uuid()
-        with self.connection() as con, con:
+        with self.write() as con:
             con.execute(
                 "INSERT INTO tasks (id,project_id,title,objective,risk,state,created_at,due_at) "
                 "VALUES (?,?,?,?,?,?,?,?)",
@@ -318,7 +372,7 @@ class Store:
     def add_dependency(self, task_id: str, depends_on: str) -> None:
         if task_id == depends_on:
             raise ZenithError("A task cannot depend on itself")
-        with self.connection() as con, con:
+        with self.write() as con:
             for tid in (task_id, depends_on):
                 if con.execute("SELECT 1 FROM tasks WHERE id=?", (tid,)).fetchone() is None:
                     raise ZenithError(f"Unknown task ID: {tid}")
@@ -341,7 +395,7 @@ class Store:
             _record_event(con, "task", task_id, "task.dependency_added", {"depends_on": depends_on})
 
     def remove_dependency(self, task_id: str, depends_on: str) -> None:
-        with self.connection() as con, con:
+        with self.write() as con:
             cur = con.execute("DELETE FROM task_dependencies WHERE task_id=? AND depends_on=?",
                               (task_id, depends_on))
             if cur.rowcount == 0:
@@ -356,7 +410,7 @@ class Store:
     def transition(self, task_id: str, target: str, actor: str = "owner", cli: bool = True) -> str:
         if target not in TRANSITIONS or (cli and target not in CLI_TRANSITIONS):
             raise ZenithError("Transition unavailable from CLI (execution requires verified worker)")
-        with self.connection() as con, con:
+        with self.write() as con:
             task = con.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             if task is None:
                 raise ZenithError("Unknown task ID")
@@ -387,7 +441,7 @@ class Store:
     def approve(self, task_id: str, actor: str = "owner", minutes: int = 60) -> str:
         if not (1 <= minutes <= 1440):
             raise ZenithError("Approval lifetime must be 1–1440 minutes")
-        with self.connection() as con, con:
+        with self.write() as con:
             task = con.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             if task is None:
                 raise ZenithError("Unknown task ID")
@@ -396,7 +450,7 @@ class Store:
             if actor != "owner":
                 raise ZenithError("Only authenticated owner (local CLI) may grant approval in Sprint-0")
             approval_id = _uuid()
-            expiry = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat(timespec="seconds")
+            expiry = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat(timespec="microseconds")
             con.execute(
                 "INSERT INTO approvals(id,task_id,scope_hash,actor,expires_at,created_at) VALUES (?,?,?,?,?,?)",
                 (approval_id, task_id, self._scope_hash(task), actor, expiry, utcnow()),
@@ -411,6 +465,18 @@ class Store:
                                "FROM events ORDER BY seq DESC LIMIT ?", (max(1, min(limit, 500)),))
             return [dict(row) for row in rows]
 
+    def source_overlaps(self) -> list[dict]:
+        """Active sources that nest or duplicate each other (only possible for pre-v3 data)."""
+        with self.connection() as con:
+            rows = [dict(r) for r in con.execute(
+                "SELECT id, project_id, node_id, path FROM project_sources WHERE removed_at IS NULL ORDER BY path")]
+        out = []
+        for i, a in enumerate(rows):
+            for b in rows[i + 1:]:
+                if a["node_id"] == b["node_id"] and policy.path_relation(a["path"], b["path"]):
+                    out.append({"a": a, "b": b, "relation": policy.path_relation(a["path"], b["path"])})
+        return out
+
     # ---- observation, snapshots and evidence -------------------------------------------------
 
     def _insert_evidence(self, con: sqlite3.Connection, project_id: str, origin: str, summary: str,
@@ -422,9 +488,12 @@ class Store:
         evidence_id, now = _uuid(), utcnow()
         confidence = CONFIDENCE_BY_ORIGIN[origin]
         digest = digest or hashlib.sha256(summary.encode()).hexdigest()
+        # `seq` is assigned inside the write transaction, so it is a gap-free, stable record of
+        # the order in which evidence was recorded (rowids are not stable across VACUUM).
         con.execute(
             "INSERT INTO evidence (id,project_id,source_id,origin,confidence,summary,source_ref,digest,"
-            "details,node_id,observed_at,last_confirmed_at,recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "details,node_id,observed_at,last_confirmed_at,recorded_at,seq) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(seq),0)+1 FROM evidence))",
             (evidence_id, project_id, source_id, origin, confidence, summary[:2000], source_ref, digest,
              json.dumps(details or {}, ensure_ascii=False), node_id, observed_at or now,
              observed_at or now, now))
@@ -448,10 +517,14 @@ class Store:
             real = registered.resolve(strict=True)
         except OSError:
             real = None
+        roots = policy.allowed_roots()
         if real is None or not real.is_dir():
             result.update(source_status="unavailable", reason="path_missing")
         elif real != registered:  # registered directory was swapped for a symlink elsewhere
             result.update(source_status="unavailable", reason="path_resolves_elsewhere")
+        elif roots and not any(real == r or r in real.parents for r in roots):
+            # The allowlist is re-checked at scan time, not only at registration time.
+            result.update(source_status="unavailable", reason="outside_allowlist")
         else:
             result.update(source_status="available", is_git_repo=False)
             result.update(scanner.git_metadata(real))
@@ -468,7 +541,7 @@ class Store:
             summary = f"{result['file_count']} files; no commits or no Git repository (metadata only)"
         if result.get("truncated"):
             summary += "; scan truncated at limits"
-        with self.connection() as con, con:
+        with self.write() as con:
             self._source_row(con, source_id)
             prev = con.execute("SELECT id,content_signature FROM snapshots WHERE source_id=? "
                                "ORDER BY collected_at DESC, rowid DESC LIMIT 1", (source_id,)).fetchone()
@@ -524,7 +597,7 @@ class Store:
         if len(rows) < 2:
             return {"source_id": source_id, "status": "insufficient_history", "snapshots": len(rows),
                     "note": "Need two distinct observations; scan again after the source changes."}
-        new, old = json.loads(rows[0]["details"]), json.loads(rows[1]["details"])
+        new, old = _load_json(rows[0]["details"], "snapshot"), _load_json(rows[1]["details"], "snapshot")
         fields = ("source_status", "path", "is_git_repo", "head", "branch", "tracked_changed_count",
                   "file_count", "fingerprint")
         changes = {f: {"from": old.get(f), "to": new.get(f)} for f in fields if old.get(f) != new.get(f)}
@@ -566,7 +639,7 @@ class Store:
         if not _NAME_RE.match(node_id):
             raise ZenithError("node id must match [A-Za-z0-9._-]{1,64}")
         when = self._parse_observed(observed_at)
-        with self.connection() as con, con:
+        with self.write() as con:
             self._project_row(con, project_id)
             evidence_id = self._insert_evidence(con, project_id, origin, summary, source_ref=source_ref,
                                                 node_id=node_id, observed_at=when, actor=actor,
@@ -578,7 +651,7 @@ class Store:
     def _parse_observed(value: str | None) -> str:
         now = datetime.now(timezone.utc)
         if not value:
-            return dates.iso_utc(now)
+            return utcnow()  # full precision, so it orders correctly against scan timestamps
         try:
             when = dates.parse_instant(value)
         except ValueError as exc:
@@ -603,7 +676,7 @@ class Store:
             later = con.execute(
                 "SELECT id,origin,last_confirmed_at FROM evidence WHERE project_id=? AND "
                 "origin IN ('REPOSITORY_OBSERVATION','TEST_VERIFICATION') AND last_confirmed_at>? "
-                "ORDER BY last_confirmed_at DESC LIMIT 5", (project_id, out["observed_at"])).fetchall()
+                "ORDER BY last_confirmed_at DESC, seq DESC LIMIT 5", (project_id, out["observed_at"])).fetchall()
         out["later_evidence"] = [dict(x) for x in later]
         out["reconciliation"] = ("later repository/test evidence exists; treat this report as possibly outdated"
                                  if later else "no later evidence; claim is unverified until observed or tested")
@@ -619,7 +692,7 @@ class Store:
             raise ZenithError("Invalid verification record")
         details = {"source_id": source_id, "command_id": command_id, "exit_code": exit_code,
                    "passed": exit_code == 0, "head": head}
-        with self.connection() as con, con:
+        with self.write() as con:
             src = self._source_row(con, source_id, active=False)
             if src["project_id"] != project_id:
                 raise ZenithError("Source does not belong to that project")
@@ -637,9 +710,9 @@ class Store:
             args.append(origin)
         with self.connection() as con:
             self._project_row(con, project_id)
-            rows = con.execute(sql + " ORDER BY observed_at DESC, rowid DESC LIMIT ?",
+            rows = con.execute(sql + " ORDER BY observed_at DESC, seq DESC LIMIT ?",
                                (*args, max(1, min(limit, 500)))).fetchall()
-        return [{**dict(r), "details": json.loads(r["details"])} for r in rows]
+        return [{**dict(r), "details": _load_json(r["details"], "evidence")} for r in rows]
 
     def brief(self, project_id: str | None = None, now: datetime | None = None) -> dict:
         from .brief import build_brief

@@ -6,9 +6,9 @@ python -m venv .venv && source .venv/bin/activate
 python -m pip install -e .
 zenith init
 zenith doctor
-python -m unittest discover -s tests -v
+scripts/test.sh            # or: python -m unittest discover -s tests -v inside the venv
 ```
-No CLI credentials required. Prefer dedicated unprivileged user for future headless workers; do not run workers as root.
+From a clean checkout without a venv, `scripts/test.sh` runs the suite from `src/` with no installation. No CLI credentials required. Prefer dedicated unprivileged user for future headless workers; do not run workers as root.
 
 ## Data paths
 - `ZENITH_DB_PATH` environment override; otherwise `${XDG_DATA_HOME:-~/.local/share}/zenith/zenith.db`.
@@ -39,6 +39,8 @@ zenith backup --out /path/to/new-backup.db
 ```
 Task state transitions are intentionally manual and execution is unavailable; **do not manually mark completion** without actual verification. `task transition` enforces the defined graph, approval gates and dependencies.
 
+Exit codes: `0` ok · `2` validation/state error (`Zenith error: …`) · `3` database error such as `database is locked` after the 5 s busy timeout, or a malformed file (nothing was committed) · `130` interrupted.
+
 ## Evidence semantics (what the labels mean)
 | Origin | Confidence | Produced by |
 |---|---|---|
@@ -48,23 +50,29 @@ Task state transitions are intentionally manual and execution is unavailable; **
 | `REPOSITORY_OBSERVATION` | `OBSERVED` | `zenith scan` only |
 | `TEST_VERIFICATION` | `VERIFIED` | deterministic verifier only (Sprint 2); no CLI path |
 
+Integrity: `events` and `evidence` are append-only via SQLite triggers (`evidence.last_confirmed_at` is the only mutable column). Evidence carries a gap-free `seq` assigned inside the write transaction, so recording order is reconstructible even when timestamps tie. **This protects against application mistakes, not against a privileged local user with `sqlite3` who can drop the triggers; it is not cryptographic.**
+
 A brief never reports `VERIFIED` unless a passing verification matches the currently observed, clean HEAD of a freshly scanned source. Sources older than 7 days are *stale*, check-ins older than 14 days are stale, and unscanned or unavailable sources are reported as *unknown*.
 
 ## Scan policy
-- A source is only scanned if it was explicitly registered. `/`, the home directory itself and credential-store directories are refused. Set `ZENITH_ALLOWED_ROOTS=/a:/b` to restrict where sources may live.
-- File contents are never read. Skipped and only counted: symlinks (never followed, escaping ones counted separately), `.env*`, `*.pem`, `*.key`, `id_*`, `*secret*`, `*credential*`, `.netrc`, `.ssh/`, `.aws/`, `.gnupg/` and similar. Files matching those names are invisible to Zenith by design (so `secrets.py` will not appear in fingerprints).
-- Git is called with `core.fsmonitor=false` and `--no-optional-locks`, so a repository's own config cannot execute commands and a scan does not touch `.git/index`.
+- A source is only scanned if it was explicitly registered. `/`, the home directory itself and credential-store directories are refused. A directory can belong to one source only and sources never nest (fail closed; `doctor` lists any overlaps left over from before schema v3 — detach one of them). Set `ZENITH_ALLOWED_ROOTS=/a:/b` to restrict where sources may live; it is checked at registration **and** at every scan (`unavailable / outside_allowlist`).
+- File contents are never read. Skipped and only counted: symlinks (never followed, escaping ones counted separately), `.env*`, `*.pem`, `*.key`, `id_*`, `*secret*`, `*credential*`, `.netrc`, `.ssh/`, `.aws/`, `.gnupg/` and similar. Because the metadata scanner never opens files and never records names, a *code* file whose name merely contains `secret`/`credential` (e.g. `secrets.py`, `credentials_test.go`) does count in file totals and fingerprints; `secrets.json`, `secrets.sh`, `.env*`, keys, stores and `credentials` do not. Any future feature that reads file contents must use the strict policy (`policy.sensitive_reason(..., strict=True)`, the default), which excludes `secrets.py` too.
+- Git is called with `core.fsmonitor=false` and `--no-optional-locks`, so a repository's own config cannot execute commands and a scan does not touch `.git/index`. `git status` is limited to the source directory, so a sub-directory source does not count changes elsewhere in the repository. Worst case a scan spends 5 × 10 s in `git` plus 10 s walking the tree.
 - If a registered directory is replaced by a symlink, the source is reported unavailable (`path_resolves_elsewhere`).
-- Timestamps have 1-second resolution; "newer evidence" means strictly later.
+- Timestamps are microsecond UTC (ISO 8601). Values written before schema v3 have second resolution and still sort correctly against the new ones.
 
 ## Backup, upgrade and restore
 ```bash
 zenith backup --out ~/zenith-backups/zenith-$(date +%F).db   # consistent even with WAL; refuses to overwrite
 zenith init                                                   # after upgrading Zenith: backup + migrate
 ```
-- Upgrades write `zenith.db.pre-v<N>-<timestamp>.bak` next to the database, apply each migration in one transaction, and roll back on any error (the backup path is in the error message). Zenith never deletes these backups; remove old ones yourself.
+- Upgrades write `zenith.db.pre-v<N>-<timestamp>.bak` next to the database, apply each migration in one transaction, and roll back on any error (the backup path is in the error message). A process killed mid-upgrade leaves the previous version intact (SQLite journal), and `init` can simply be re-run. Zenith never deletes these backups; remove old ones yourself. If the backup itself fails, the upgrade does not start and the partial backup file is removed.
+- `zenith doctor` reports `schema_version`, `schema_expected` and, when they differ, `schema_action`. The `schema.migrated` event is written right after the migration commits; a crash in that gap loses only the event.
+- Opening a WAL database read-only (`doctor`, `backup`) may create `-wal`/`-shm` sidecar files; they are harmless.
 - Zenith refuses to run on an older schema until `zenith init` is run, and refuses to open a database newer than itself.
 - **Restore** = stop anything using the database, then point `ZENITH_DB_PATH` at the backup copy (or copy it over the live path after moving the live file aside), and run `zenith init`. Do not delete `-wal`/`-shm` files while processes are running.
+- **Rollback after an upgrade** = stop Zenith; move `zenith.db` (and any `-wal`/`-shm`) aside; copy the `.pre-v<N>-*.bak` file to `zenith.db`; run the previous Zenith version (a newer schema is refused by older code, and vice versa).
+- Rehearse first on a copy: `cp zenith.db /tmp/rehearsal.db && ZENITH_DB_PATH=/tmp/rehearsal.db zenith init && ZENITH_DB_PATH=/tmp/rehearsal.db zenith doctor`.
 
 ## Service deployment (future)
 - `ops/systemd/` includes a **non-enabled** illustrative service sketch. No unattended worker is installed by this package.

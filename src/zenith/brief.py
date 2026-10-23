@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timedelta
 
 from . import dates
+from .kernel import ZenithError, _load_json
 
 SOURCE_STALE_DAYS = 7
 CHECKIN_STALE_DAYS = 14
@@ -36,7 +37,11 @@ def _source_view(store, src: dict, now: datetime) -> dict:
             "branch": None, "tracked_changed_count": None, "evidence_id": ev["id"] if ev else None}
     if snap is None:
         return view
-    d = json.loads(snap["details"])
+    try:
+        d = _load_json(snap["details"], "snapshot")
+    except ZenithError:
+        view.update(state="corrupt_record", last_seen_at=snap["collected_at"])
+        return view
     view.update(last_seen_at=snap["last_seen_at"] or snap["collected_at"], head=d.get("head"),
                 branch=d.get("branch"), tracked_changed_count=d.get("tracked_changed_count"))
     view["age_days"] = _age_days(view["last_seen_at"], now)
@@ -95,6 +100,8 @@ def _project_brief(store, project: dict, now: datetime) -> dict:
             unknowns.append(f"Source '{name}' has never been scanned: repository state unknown.")
         elif s["state"] == "unavailable":
             unknowns.append(f"Source '{name}' was unavailable at its last scan ({s['last_seen_at']}): current state unknown.")
+        elif s["state"] == "corrupt_record":
+            unknowns.append(f"Source '{name}': latest snapshot record is corrupt; state unknown until rescanned.")
         elif s["state"] == "stale":
             unknowns.append(f"Source '{name}' last observed {s['age_days']} days ago: may be out of date.")
     if not sources:
@@ -107,7 +114,7 @@ def _project_brief(store, project: dict, now: datetime) -> dict:
         with store.connection() as con:
             newer = [r["id"] for r in con.execute(
                 "SELECT id FROM evidence WHERE project_id=? AND origin IN ('REPOSITORY_OBSERVATION','TEST_VERIFICATION') "
-                "AND last_confirmed_at>? ORDER BY last_confirmed_at DESC LIMIT 5", (pid, report["observed_at"]))]
+                "AND last_confirmed_at>? ORDER BY last_confirmed_at DESC, seq DESC LIMIT 5", (pid, report["observed_at"]))]
         age = _age_days(report["observed_at"], now)
         report_view = {"evidence_id": report["id"], "confidence": report["confidence"],
                        "observed_at": report["observed_at"], "node_id": report["node_id"],
@@ -133,6 +140,8 @@ def _project_brief(store, project: dict, now: datetime) -> dict:
         if s["state"] in ("never_scanned", "stale"):
             actions.append({"action": f"Scan source '{name}' (zenith scan --project {pid} --source {s['source_id']}).",
                             "citations": [s["evidence_id"]] if s["evidence_id"] else []})
+        elif s["state"] == "corrupt_record":
+            actions.append({"action": f"Rescan source '{name}': its stored snapshot could not be read.", "citations": []})
         elif s["state"] == "unavailable":
             actions.append({"action": f"Source '{name}' is unavailable: reconnect it, move it, or remove it.",
                             "citations": [s["evidence_id"]] if s["evidence_id"] else []})
