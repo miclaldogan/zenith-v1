@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 from ..demo import make_repo
-from ..kernel import Store
+from ..kernel import Store, ZenithError
 from .repl import MisaSession
 
 
@@ -133,19 +133,61 @@ def render(results: dict) -> str:
     return "\n".join(lines)
 
 
+ACK_ENV = "ZENITH_LIVE_SMOKE_ACK"
+ACK_VALUE = "I-AUTHORIZE-ONE-LIVE-PROVIDER-CALL"
+
+
+def live_check(store: Store, question: str, provider_name: str, authorize: bool) -> dict:
+    """Exactly ONE live turn on synthetic data. Refused unless the adapter is enabled, its credential
+    file exists, the sandbox baseline holds, --authorize-live-call is given and the ACK is set."""
+    import os
+    import tempfile
+    from ..extensions import load
+    from ..kernel import _record_event
+    adapter = load(provider_name, "conversation", script={})
+    pre = adapter.preflight()
+    blockers = []
+    if not pre["sandbox_ok"]:
+        blockers.append("sandbox baseline unavailable")
+    if not pre["auth"]["ok"]:
+        blockers.append("auth: " + pre["auth"]["detail"])
+    plan = {"mode": "live-check", "provider": provider_name, "question": question, "requests": 1,
+            "preflight": pre, "blockers": blockers, "live_call_performed": False}
+    if not authorize:
+        plan["note"] = f"Preflight only. Re-run with --authorize-live-call and {ACK_ENV}={ACK_VALUE} for the single call."
+        return plan
+    if os.environ.get(ACK_ENV) != ACK_VALUE:
+        raise ZenithError(f"Live call refused: set {ACK_ENV}={ACK_VALUE}")
+    if blockers:
+        raise ZenithError("Live call refused: " + "; ".join(blockers))
+    base = Path(tempfile.mkdtemp(prefix="misa-live-check-"))
+    world = build_world(base)
+    out: list[str] = []
+    session = MisaSession(Store(world["db"]), out=out.append, provider=adapter, state_root=base)
+    session.state = {"language": "tr"}
+    reply, _ = session.handle(question)
+    turns = Store(world["db"]).list_turns()
+    with store.write() as con:
+        _record_event(con, "system", "misa", "misa.live_check", {"provider": provider_name, "generated_by": turns[-1]["generated_by"],
+                                                                  "grounding": session.state.get("last_grounding")}, actor="owner")
+    return {**plan, "live_call_performed": True, "reply": reply, "generated_by": turns[-1]["generated_by"],
+            "grounding": session.state.get("last_grounding"), "dir": str(base)}
+
+
 def live_plan() -> dict:
     """Exact, minimal, read-only live test — printed for owner authorization; performs no call."""
-    from ..extensions import discover, load
+    from ..extensions import load
     try:
-        adapter = load("claude-code-conversation", "conversation", script={})
+        adapter = load("anthropic-api-conversation", "conversation", script={})
         pre = adapter.preflight()
     except Exception as exc:  # not enabled / not configured: still print the plan
         pre = {"blockers": [str(exc)]}
     return {
-        "provider": "Claude Code CLI 2.1.309 via adapter claude-code-conversation (replaceable; the same port as fake-conversation)",
-        "authentication": "owner's claude.ai subscription token from `claude setup-token` saved to a 0600 file → "
-                          "ZENITH_CLAUDE_OAUTH_TOKEN_FILE (mode oauth, --safe-mode); or an API-key file (mode api_key, --bare). "
-                          "Read inside the sandbox only; Zenith never reads it.",
+        "provider": "Anthropic Messages API (adapter anthropic-api-conversation, model from ZENITH_ANTHROPIC_MODEL, default "
+                    "claude-sonnet-5-5); replaceable through the same conversation port. Claude Code CLI remains the engineering tool.",
+        "authentication": "Anthropic Console API key in a 0600 file → ZENITH_ANTHROPIC_API_KEY_FILE. Injected only inside the sandbox by "
+                          "the forwarder; Zenith never reads it. claude.ai subscription/OAuth tokens are NOT used for Misa (policy).",
+        "billing": "pay-as-you-go per token on the Anthropic Console account; each turn ≈ 2–6k input + ≤1.2k output tokens.",
         "data_visible_to_provider": "ONLY /work/request.json: the question, project cards (name, status, source labels), "
                                     "≤ 40 context items (summaries ≤ 300 chars, ids, dates, epistemic tags), ≤ 8 relevant past turns, "
                                     "instructions. No repository files, no paths, no credentials. Synthetic acceptance DB only.",
@@ -160,8 +202,11 @@ def live_plan() -> dict:
                     "Lighthouse's Postgres decision. Every reply must pass the deterministic checks; a human scores the rubric.",
         "failure_and_cancellation": "any contract/grounding failure → flagged offline fallback (the run continues); timeout/kill → the turn is "
                                     "recorded as failed, nothing written; Ctrl-C ends the session with state saved; `zenith run`/approvals untouched.",
-        "command": "ZENITH_ENABLED_ADAPTERS=claude-code-conversation ZENITH_CLAUDE_OAUTH_TOKEN_FILE=<path> "
-                   "ZENITH_LIVE_SMOKE_ACK=I-AUTHORIZE-ONE-LIVE-PROVIDER-CALL zenith misa --eval --provider claude-code-conversation",
+        "first_step": "ONE turn: ZENITH_ENABLED_ADAPTERS=anthropic-api-conversation ZENITH_ANTHROPIC_API_KEY_FILE=<path> "
+                      "ZENITH_LIVE_SMOKE_ACK=I-AUTHORIZE-ONE-LIVE-PROVIDER-CALL zenith misa --live-check \"Harbor ne âlemde?\" --authorize-live-call",
+        "then": "8-turn eval (separate authorization): … zenith misa --eval --provider anthropic-api-conversation",
+        "logging": "run events keep model, request id, token counts, proxy decisions; never the key, never request headers; "
+                   "turn texts are redacted for credential patterns before storage.",
         "preflight": pre,
         "note": "The call is refused until the adapter is enabled, the credential file exists (0600) and the ACK is set.",
     }

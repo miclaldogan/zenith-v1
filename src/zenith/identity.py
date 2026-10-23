@@ -80,7 +80,7 @@ def load(env: dict | None = None, repo: Path | None = None) -> IdentityConfig:
     roles = {"engineering_director": env.get("ZENITH_ROLE_ENGINEERING_DIRECTOR", "codex-director"),
              "implementer": env.get("ZENITH_ROLE_IMPLEMENTER", "claude-code-implementer"),
              "reviewer": env.get("ZENITH_ROLE_REVIEWER", "codex-director"),
-             "conversation": env.get("ZENITH_ROLE_CONVERSATION", "claude-code-conversation"),
+             "conversation": env.get("ZENITH_ROLE_CONVERSATION", "anthropic-api-conversation"),
              "verifier": "zenith-verifier"}
     coauthors = [_parse_person(x) for x in env.get("ZENITH_COAUTHORS", "").split(";") if x.strip()]
     return IdentityConfig(assistant, platform, owner, roles, coauthors)

@@ -41,6 +41,20 @@ Task state transitions are intentionally manual and execution is unavailable; **
 
 Exit codes: `0` ok · `2` validation/state error (`Zenith error: …`) · `3` database error such as `database is locked` after the 5 s busy timeout, or a malformed file (nothing was committed) · `130` interrupted.
 
+## Install and daily commands
+```bash
+scripts/install.sh [--editable]            # ~/.local/share/zenith/venv + ~/.local/bin/zenith + fish completions
+zenith doctor [--full]                     # tools, db schema vs expected, sandbox, providers and their auth configuration, install path
+zenith project discover --root DIR [--max-depth 3]      # dry run: git repos and marker dirs under an approved folder (never ~ or /)
+zenith project discover --root DIR --add 1,3            # register selected candidates as projects
+zenith project discover --root DIR --attach 2 --project ID   # attach one candidate as a source of an existing project
+zenith project inspect --id ID             # read-only: sources (local/remote node), freshness, HEAD, verification applicability, open work
+zenith project docs --id ID [--allow GLOB ...] [--cloud-consent yes|no]   # local doc permission vs cloud transmission permission (separate)
+zenith misa --live-plan                    # the authorized live test, spelled out; no call
+zenith misa --live-check "soru" [--authorize-live-call]   # ONE live turn on synthetic data (needs enabled adapter, key file, ACK)
+```
+Discovery reads directory and marker *names* only, skips hidden/build/credential directories and symlinks, and stops at depth 3 / 2000 directories. Registration keeps the Sprint 1 identity rules (canonical paths, no nesting, one owner per directory). Repository text (recent commit subjects, permitted docs) is marked untrusted and stays local unless the project has `cloud_consent`.
+
 ## Misa session (offline, deterministic)
 ```bash
 zenith                        # opens Misa: evidence-grounded opening, then a conversation; Ctrl-C / `çık` / `exit` save state

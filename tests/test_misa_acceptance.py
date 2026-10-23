@@ -116,7 +116,7 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         plan = json.loads(r.stdout)
         self.assertIn("api.anthropic.com:443", plan["security"])
-        self.assertIn("ZENITH_LIVE_SMOKE_ACK", plan["command"])
+        self.assertIn("ZENITH_LIVE_SMOKE_ACK", plan["first_step"])
         self.assertTrue(plan["preflight"].get("blockers"))           # not enabled → blockers, no call
         self.assertFalse((self.base / "unused.db").exists())
 

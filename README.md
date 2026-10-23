@@ -33,7 +33,21 @@ Sprint 1 acceptance audit and hardening record: [`docs/plans/SPRINT_1_ACCEPTANCE
 
 **Not implemented:** live model execution (Claude Code / Codex adapters), autonomous commits/push, TUI, MCP, Gmail, Calendar, Telegram, remote Hub/Node sync, tmux automation, Hyprland window management, autonomous planning. Never claim they are functional.
 
-## Start on Arch Linux
+## Install for everyday use (Arch Linux, fish/zsh/bash)
+
+```bash
+git clone https://github.com/miclaldogan/zenith-v1 ~/src/zenith-v1 && cd ~/src/zenith-v1
+scripts/install.sh            # venv in ~/.local/share/zenith/venv, `zenith` linked into ~/.local/bin, fish completions
+fish_add_path ~/.local/bin    # fish, once (bash/zsh: add ~/.local/bin to PATH)
+zenith doctor --full          # tools, database schema, sandbox baseline, providers (nothing is changed)
+zenith init                   # creates or upgrades the database (backup first) — upgrading an existing DB needs your go-ahead
+zenith                        # Misa
+```
+Everyday flow: `zenith project discover --root ~/projects` (dry run) → `… --add 1,3` → `zenith scan --project <id> --all` → `zenith` and ask in Turkish or English. `zenith project inspect --id <id>` shows sources, freshness and verification without touching anything; `zenith project docs --id <id> --allow README.md` lets Misa read a document locally; `--cloud-consent yes` is a *separate* permission for sending that project's context to a model. Misa works fully offline; a model is used only when a conversation adapter is enabled and authorized.
+
+**Conversation provider (milestone finding):** Misa's general conversation uses the Anthropic Messages API with a Console API key (`anthropic-api-conversation`, pay-as-you-go), with the HTTP client running inside the bubblewrap sandbox so Zenith never reads the key. claude.ai subscription/OAuth tokens are **not** brokered for Misa; native Claude Code with your own login stays the separately authorized engineering tool. No live call has been made yet.
+
+## Start on Arch Linux (developer checkout)
 
 ```bash
 unzip zenith-v1-starter.zip

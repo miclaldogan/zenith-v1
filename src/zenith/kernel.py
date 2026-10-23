@@ -263,6 +263,33 @@ class Store:
         with self.connection() as con:
             return self._project_row(con, project_id)
 
+    PROJECT_SETTING_KEYS = ("docs", "cloud_consent")
+
+    def project_settings(self, project_id: str) -> dict:
+        with self.connection() as con:
+            row = con.execute("SELECT settings FROM projects WHERE id=?", (project_id,)).fetchone()
+        if row is None:
+            raise ZenithError(f"Unknown project: {project_id}")
+        s = _load_json(row["settings"] or "{}", "project settings")
+        return {"docs": list(s.get("docs", [])), "cloud_consent": bool(s.get("cloud_consent", False))}
+
+    def set_project_settings(self, project_id: str, docs: list[str] | None = None,
+                             cloud_consent: bool | None = None, actor: str = "owner") -> dict:
+        """`docs`: repo-relative globs Misa may read locally (strict sensitive policy still applies).
+        `cloud_consent`: whether this project's context may be sent to an external model. Independent."""
+        current = self.project_settings(project_id)
+        if docs is not None:
+            for g in docs:
+                if not isinstance(g, str) or not g or g.startswith("/") or ".." in g.split("/"):
+                    raise ZenithError(f"Invalid doc pattern: {g!r}")
+            current["docs"] = docs
+        if cloud_consent is not None:
+            current["cloud_consent"] = bool(cloud_consent)
+        with self.write() as con:
+            con.execute("UPDATE projects SET settings=? WHERE id=?", (json.dumps(current, sort_keys=True), project_id))
+            _record_event(con, "project", project_id, "project.settings_changed", current, actor)
+        return current
+
     def _source_row(self, con: sqlite3.Connection, source_id: str, active: bool = True) -> sqlite3.Row:
         r = con.execute("SELECT * FROM project_sources WHERE id=?", (source_id,)).fetchone()
         if r is None or (active and r["removed_at"] is not None):

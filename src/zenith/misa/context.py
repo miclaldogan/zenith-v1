@@ -16,7 +16,9 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from .. import dates
+from pathlib import Path
+
+from .. import dates, scanner
 from ..contracts import validate
 from ..kernel import Store, utcnow
 from .intents import detect_language
@@ -241,6 +243,23 @@ class ContextAssembler:
         for r in runs:
             add("run", r["id"], f"run for '{titles.get(r['task_id'], '?')}' attempt {r['attempt']}: {r['state']}"
                 + (f" ({r['exit_reason']})" if r["exit_reason"] else ""), r["ended_at"] or r["created_at"], "observed")
+        # Repository text (commit subjects, permitted docs) is retrieved read-only and marked untrusted;
+        # it stays local unless the project has cloud consent (the engine strips local_only items for live providers).
+        settings = self.store.project_settings(pid)
+        local_only = not settings["cloud_consent"]
+        for s in b["sources"]:
+            if s["state"] == "fresh" and s["head"] and qtype in ("last", "history", "detail", "status", "why", "unfinished"):
+                src_path = next((x["path"] for x in project["sources"] if x["id"] == s["source_id"]), None)
+                if src_path:
+                    for c in scanner.recent_commits(Path(src_path), n=5):
+                        add("commit", f"commit:{c['head'][:12]}", f"[untrusted repo text] {c['subject']}", c["when"], "observed",
+                            head=c["head"], local_only=local_only)
+                    for pattern in settings["docs"][:5]:
+                        ex = scanner.doc_excerpt(Path(src_path), pattern)
+                        if ex:
+                            add("doc", f"doc:{ex['sha256_prefix']}", f"[untrusted document {ex['path']}] " + ex["text"][:MAX_TEXT],
+                                None, "observed", path=ex["path"], truncated=ex["truncated"], local_only=local_only)
+                    break
         for t in self.store.list_tasks(pid, state="AWAITING_APPROVAL"):
             add("approval", t["id"], f"'{t['title']}' awaits your approval", t["created_at"], "intended")
         for t in self.store.list_tasks(pid, state="RECONCILE_REQUIRED"):

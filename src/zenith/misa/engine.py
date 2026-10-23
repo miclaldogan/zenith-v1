@@ -188,6 +188,14 @@ class ConversationEngine:
             state["last_grounding"] = assess_grounding(reply, request)
             return reply, "deterministic-offline", True
         ctx_dir = None
+        if getattr(self.provider.capabilities(), "live", False):
+            # cloud boundary: repository text never leaves the machine without per-project consent
+            stripped = [i for i in request["items"] if i.get("local_only")]
+            if stripped:
+                request = {**request, "items": [i for i in request["items"] if not i.get("local_only")]}
+                request["instructions"] = request["instructions"] + [
+                    f"{len(stripped)} repository-text item(s) were withheld: the project has no cloud consent."]
+                state["last_withheld"] = len(stripped)
         try:
             ctx_dir = self._context_dir(request)
             ctx = RunContext(run_id=f"conv-{request['generated_at']}", stage="conversation", deadline_seconds=90.0, read_root=ctx_dir)
@@ -339,6 +347,9 @@ class ConversationEngine:
                 row = con.execute("SELECT path, label FROM project_sources WHERE id=?", (i,)).fetchone()
                 if row:
                     lines.append(f"  [src:{i[:8]}] {row['label'] or row['path']}")
+                    continue
+                if i.startswith(("commit:", "doc:")):
+                    lines.append(f"  [{i}] " + ("depo metni (güvenilmez veri)" if lang == "tr" else "repository text (untrusted data)"))
         head = "Son cevabın dayandığı kayıtlar:" if lang == "tr" else "Records behind the last answer:"
         g = state.get("last_grounding") or {}
         if g:

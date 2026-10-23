@@ -20,8 +20,11 @@ def make_parser() -> argparse.ArgumentParser:
     ms.add_argument("--eval", action="store_true", help="run conversation acceptance scenarios A/B/C on a throwaway DB (offline or mock)")
     ms.add_argument("--provider", default=None, help="conversation adapter for --eval (default: offline composer; e.g. fake-conversation)")
     ms.add_argument("--live-plan", action="store_true", help="print the owner-authorized live conversation test plan; makes no call")
+    ms.add_argument("--live-check", metavar="QUESTION", help="ONE authorized live turn on synthetic data (needs --authorize-live-call + ACK)")
+    ms.add_argument("--authorize-live-call", action="store_true")
     cmds.add_parser("init", help="Initialize the local SQLite database")
-    cmds.add_parser("doctor", help="Read-only check of installed local tools")
+    dr0 = cmds.add_parser("doctor", help="Read-only health check: tools, database, providers, sandbox, install")
+    dr0.add_argument("--full", action="store_true", help="also probe the sandbox and list provider configuration")
 
     projects = cmds.add_parser("project", help="Manage project registry").add_subparsers(dest="sub", required=True)
     a = projects.add_parser("add")
@@ -47,6 +50,18 @@ def make_parser() -> argparse.ArgumentParser:
     sm.add_argument("--path", required=True)
     sd = srcs.add_parser("diff", help="Compare the two latest snapshots of a source")
     sd.add_argument("--source", required=True)
+    dv = projects.add_parser("discover", help="Dry-run discovery of candidate projects under an approved root")
+    dv.add_argument("--root", required=True, help="an explicit projects folder (never / or your whole home)")
+    dv.add_argument("--max-depth", type=int, default=3)
+    dv.add_argument("--add", help="register candidates by index, e.g. 1,3 (new projects)")
+    dv.add_argument("--attach", help="attach ONE candidate index as a source of --project")
+    dv.add_argument("--project")
+    ip = projects.add_parser("inspect", help="Read-only view: sources, freshness, git head, verification, open work")
+    ip.add_argument("--id", required=True)
+    dc2 = projects.add_parser("docs", help="Which documents Misa may read locally, and cloud consent (separate)")
+    dc2.add_argument("--id", required=True)
+    dc2.add_argument("--allow", action="append", default=None, metavar="GLOB", help="set the permitted doc globs (repeatable)")
+    dc2.add_argument("--cloud-consent", choices=["yes", "no"], help="allow project context to be sent to an external model")
 
     tasks = cmds.add_parser("task", help="Manage task lifecycle").add_subparsers(dest="sub", required=True)
     ta = tasks.add_parser("add")
@@ -248,6 +263,10 @@ def main() -> None:
                 from .misa.acceptance import live_plan
                 output(live_plan())
                 sys.exit(0)
+            if getattr(args, "live_check", None):
+                from .misa.acceptance import live_check
+                output(live_check(store, args.live_check, args.provider or "anthropic-api-conversation", args.authorize_live_call))
+                sys.exit(0)
             from .misa.repl import main as misa_main
             sys.exit(misa_main(store, getattr(args, "once", None)))
         if args.cmd == "init":
@@ -256,14 +275,46 @@ def main() -> None:
             version = store.schema_version()
             from .migrations import LATEST_VERSION
             overlaps = store.source_overlaps() if version == LATEST_VERSION else None
-            output({"database_exists": store.db_path.exists(),
-                    "db_path": str(store.db_path),
-                    "schema_version": version, "schema_expected": LATEST_VERSION,
-                    "schema_action": (None if version in (None, LATEST_VERSION)
-                                      else "run `zenith init` to upgrade (backup is written first)"),
-                    "source_overlaps": overlaps,
-                    "tools": {x: bool(shutil.which(x)) for x in ("git", "tmux", "hyprctl", "claude", "codex")},
-                    "note": "Tool presence is not proof of authentication or permission."})
+            report = {"database_exists": store.db_path.exists(),
+                      "db_path": str(store.db_path),
+                      "schema_version": version, "schema_expected": LATEST_VERSION,
+                      "schema_action": (None if version in (None, LATEST_VERSION)
+                                        else "run `zenith init` to upgrade (backup is written first)"),
+                      "source_overlaps": overlaps,
+                      "tools": {x: bool(shutil.which(x)) for x in ("git", "tmux", "hyprctl", "claude", "codex", "bwrap")},
+                      "install": {"zenith_on_path": shutil.which("zenith"), "python": sys.executable},
+                      "note": "Tool presence is not proof of authentication or permission."}
+            if args.full:
+                from .extensions import describe_all, load
+                from .sandbox import detect
+                from . import identity as _identity
+                caps = detect()
+                report["sandbox"] = {"ok": caps.ok, "bwrap": caps.bwrap_version, "reasons": caps.reasons}
+                roles = _identity.load().roles
+                providers = []
+                for d in describe_all():
+                    entry = {"name": d["name"], "kind": d["kind"], "live": d["live"], "enabled": d["enabled"],
+                             "assigned_roles": [r for r, n in roles.items() if n == d["name"]]}
+                    if d["live"]:
+                        try:
+                            a = load(d["name"], d["kind"], script={}) if d["enabled"] else None
+                        except ZenithError:
+                            a = None
+                        if a is None:
+                            try:
+                                from .extensions import discover as _disc
+                                a = _disc()[d["name"]].factory({})
+                            except Exception:
+                                a = None
+                        if a is not None and hasattr(a, "check_auth"):
+                            st = a.check_auth()
+                            entry["auth_configured"] = st.ok
+                            entry["auth_detail"] = st.detail
+                            entry["auth_mode"] = a.auth_mode() if hasattr(a, "auth_mode") else None
+                    providers.append(entry)
+                report["providers"] = providers
+                report["offline_conversation"] = "available (deterministic composer) — `zenith` works without any provider"
+            output(report)
         elif args.cmd == "project":
             if args.sub == "add":
                 output({"project_id": store.add_project(args.name, args.path, args.category)})
@@ -271,6 +322,31 @@ def main() -> None:
                 output(store.list_projects())
             elif args.sub == "show":
                 output(store.get_project(args.id))
+            elif args.sub == "discover":
+                from .discover import discover, register
+                listing = discover(store, args.root, args.max_depth)
+                if args.add or args.attach:
+                    idx = [int(x) for x in (args.add or args.attach).split(",") if x.strip()]
+                    if args.attach and (len(idx) != 1 or not args.project):
+                        raise ZenithError("--attach takes exactly one index and needs --project")
+                    output({"registered": register(store, listing, idx, args.project if args.attach else None)})
+                else:
+                    output(listing)
+            elif args.sub == "inspect":
+                p = store.get_project(args.id)
+                b = store.brief(args.id)["projects"][0]
+                output({"project": {k: p[k] for k in ("id", "name", "category", "state", "created_at")},
+                        "settings": store.project_settings(args.id),
+                        "sources": [{**s, "node": s["node_id"], "remote": s["node_id"] != "local"} for s in b["sources"]],
+                        "status": b["status"], "latest_verification": b["latest_verification"],
+                        "latest_human_report": b["latest_human_report"], "tasks": b["tasks"], "unknowns": b["unknowns"],
+                        "note": "read-only; nothing was scanned or modified"})
+            elif args.sub == "docs":
+                if args.allow is None and args.cloud_consent is None:
+                    output(store.project_settings(args.id))
+                else:
+                    output(store.set_project_settings(args.id, docs=args.allow,
+                                                      cloud_consent=None if args.cloud_consent is None else args.cloud_consent == "yes"))
             elif args.sub == "sources":
                 if args.src_sub == "add":
                     output({"source_id": store.add_source(args.project, args.path, args.label)})

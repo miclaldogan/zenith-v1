@@ -119,3 +119,39 @@ def commits_between(path: Path, old: str, new: str) -> int | None:
         return int(out.stdout.strip()) if out.returncode == 0 else None
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         return None
+
+
+def recent_commits(path: Path, n: int = 10) -> list[dict]:
+    """Hash, ISO date and subject of the last n commits. Subjects are repository text: untrusted data."""
+    try:
+        out = _git(path, "log", f"-{max(1, min(n, 50))}", "--format=%H%x1f%cI%x1f%s", "--no-merges")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    if out.returncode != 0:
+        return []
+    rows = []
+    for line in out.stdout.splitlines():
+        parts = line.split("\x1f")
+        if len(parts) == 3:
+            rows.append({"head": parts[0], "when": parts[1], "subject": parts[2][:120]})
+    return rows
+
+
+def doc_excerpt(root: Path, rel: str, max_bytes: int = 4000) -> dict | None:
+    """Bounded, read-only excerpt of one explicitly permitted document. Never follows symlinks,
+    never reads credential-like names, never leaves the root."""
+    from .policy import sensitive_reason
+    from .contracts import glob_to_regex  # validates the relative pattern
+    glob_to_regex(rel)
+    p = (root / rel)
+    try:
+        resolved = p.resolve(strict=True)
+    except OSError:
+        return None
+    if root.resolve() not in resolved.parents or p.is_symlink() or not resolved.is_file():
+        return None
+    if any(sensitive_reason(part, is_dir=False, strict=True) for part in rel.split("/")):
+        return None
+    data = resolved.read_bytes()[:max_bytes]
+    return {"path": rel, "bytes": len(data), "truncated": resolved.stat().st_size > max_bytes,
+            "text": data.decode("utf-8", "replace"), "sha256_prefix": hashlib.sha256(resolved.read_bytes()).hexdigest()[:12]}

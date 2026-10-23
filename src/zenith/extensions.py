@@ -50,6 +50,11 @@ def _claude_conversation(script=None):
     return ClaudeCodeConversation(script)
 
 
+def _api_conversation(script=None):
+    from .misa.conversation import AnthropicApiConversation
+    return AnthropicApiConversation(script)
+
+
 _BUILTIN = (
     AdapterManifest("fake-director", "director", SCHEMA_VERSION, FakeDirector, live=False, permissions=()),
     AdapterManifest("fake-implementer", "implementer", SCHEMA_VERSION, FakeImplementer, live=False,
@@ -68,8 +73,11 @@ _BUILTIN = (
                     permissions=("unsupported:autonomous-execution",), version="cli-0.162.1-verified"),
     AdapterManifest("fake-conversation", "conversation", SCHEMA_VERSION, _fake_conversation, live=False),
     AdapterManifest("claude-code-conversation", "conversation", SCHEMA_VERSION, _claude_conversation, live=True,
-                    permissions=("network:api.anthropic.com:443", "credentials:claude", "context:read-only"),
+                    permissions=("network:api.anthropic.com:443", "credentials:anthropic-api-key-only", "context:read-only"),
                     version="cli-2.1.309-verified"),
+    AdapterManifest("anthropic-api-conversation", "conversation", SCHEMA_VERSION, _api_conversation, live=True,
+                    permissions=("network:api.anthropic.com:443", "credentials:anthropic-api-key", "context:read-only", "no-tools"),
+                    version="messages-api-2023-06-01"),
 )
 
 

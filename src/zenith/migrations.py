@@ -221,6 +221,12 @@ def _m005_misa_conversations(con: sqlite3.Connection) -> None:
     _append_only(con, "conversation_turns")
 
 
+def _m006_project_settings(con: sqlite3.Connection) -> None:
+    """Milestone: owner-controlled project settings — which docs Misa may read locally and whether
+    project context may be transmitted to a cloud model (separate permissions)."""
+    con.execute("ALTER TABLE projects ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'")
+
+
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 MIGRATIONS: list[Migration] = [
     (1, "sprint0_baseline", _m001_baseline),
@@ -228,6 +234,7 @@ MIGRATIONS: list[Migration] = [
     (3, "sprint1_hardening_integrity_and_ordering", _m003_integrity_and_ordering),
     (4, "sprint2_durable_orchestration", _m004_durable_orchestration),
     (5, "sprint3_misa_conversations", _m005_misa_conversations),
+    (6, "milestone_project_settings", _m006_project_settings),
 ]
 LATEST_VERSION = MIGRATIONS[-1][0]
 
