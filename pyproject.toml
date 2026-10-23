@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zenith-personal-os"
+version = "0.1.0"
+description = "Zenith local-first orchestration kernel — safe Sprint-0 starter"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+zenith = "zenith.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

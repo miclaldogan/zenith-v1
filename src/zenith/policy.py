@@ -1,0 +1,89 @@
+"""Sensitivity, path and redaction policy. Pure functions; no I/O except path resolution."""
+from __future__ import annotations
+
+import fnmatch
+import os
+import re
+from pathlib import Path
+
+
+class PolicyError(Exception):
+    """Raised for policy violations; the kernel converts it to ZenithError."""
+
+
+# Directories whose *contents* are never listed, fingerprinted or read.
+SENSITIVE_DIR_NAMES = frozenset({".ssh", ".gnupg", ".aws", ".kube", ".azure", ".password-store"})
+# Bulky/derived directories skipped by the scanner (Git data is read through `git`, not the tree).
+SKIP_DIR_NAMES = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__",
+                            ".mypy_cache", ".pytest_cache", ".tox"})
+
+_SENSITIVE_EXACT = frozenset({
+    ".netrc", ".npmrc", ".pypirc", ".git-credentials", ".htpasswd", "credentials",
+    "kubeconfig", "shadow", "wallet.dat", "token", "tokens.json",
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+})
+_SENSITIVE_PATTERNS = (
+    ".env", ".env.*", "*.env", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore",
+    "*.kdbx", "*.gpg", "*.secret", "*.secrets", "*secret*", "*credential*",
+    "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", "service-account*.json",
+)
+
+
+def sensitive_reason(name: str, is_dir: bool = False) -> str | None:
+    """Return why a directory entry must be excluded from scans, or None if it is allowed.
+
+    Excluded entries are neither opened nor stat'ed; only a per-reason counter is kept.
+    """
+    lowered = name.lower()
+    if is_dir:
+        return "sensitive_dir" if lowered in SENSITIVE_DIR_NAMES else None
+    if lowered in _SENSITIVE_EXACT or any(fnmatch.fnmatchcase(lowered, p) for p in _SENSITIVE_PATTERNS):
+        return "sensitive_file"
+    return None
+
+
+def allowed_roots() -> list[Path]:
+    """Optional operator allowlist: ZENITH_ALLOWED_ROOTS=/a:/b restricts where sources may live."""
+    raw = os.environ.get("ZENITH_ALLOWED_ROOTS", "")
+    return [Path(x).expanduser().resolve() for x in raw.split(os.pathsep) if x.strip()]
+
+
+def validate_source_path(raw: str) -> Path:
+    """Resolve and vet a directory that may become a project source.
+
+    Raises FileNotFoundError for missing paths (callers rely on that) and PolicyError for
+    paths Zenith must never register.
+    """
+    p = Path(raw).expanduser().resolve(strict=True)
+    if not p.is_dir():
+        raise PolicyError("Project path must point to an existing directory")
+    if p == Path(p.anchor) or p == Path.home().resolve():
+        raise PolicyError("Refusing to register the filesystem root or the whole home directory")
+    if any(part.lower() in SENSITIVE_DIR_NAMES for part in p.parts):
+        raise PolicyError("Refusing to register a directory inside a credential store")
+    roots = allowed_roots()
+    if roots and not any(p == r or r in p.parents for r in roots):
+        raise PolicyError("Path is outside ZENITH_ALLOWED_ROOTS")
+    return p
+
+
+_REDACTIONS = (
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}"),
+    re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b"),
+)
+_KEY_VALUE = re.compile(r"(?i)\b(api[_-]?key|secret|token|passw(?:or)?d|pwd)(\s*[:=]\s*)\S+")
+
+
+def redact(text: str) -> tuple[str, int]:
+    """Mask likely credentials in free text. Returns (clean_text, replacements)."""
+    count = 0
+    for pat in _REDACTIONS:
+        text, n = pat.subn("[REDACTED]", text)
+        count += n
+    text, n = _KEY_VALUE.subn(lambda m: f"{m.group(1)}{m.group(2)}[REDACTED]", text)
+    return text, count + n

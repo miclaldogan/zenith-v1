@@ -1,0 +1,16 @@
+# EXAMPLE ONLY — DO NOT ENABLE YET. Worker command is not implemented in Sprint-0.
+[Unit]
+Description=Zenith unprivileged worker (future)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/zenith worker start
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+# Future deployment must provide explicit filesystem restriction policy.
+
+[Install]
+WantedBy=default.target

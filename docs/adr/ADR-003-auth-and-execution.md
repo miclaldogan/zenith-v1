@@ -1,0 +1,2 @@
+# ADR-003 — No subscription credential proxy
+**Accepted 2026-10-23.** Support documented personal CLI workflows under applicable provider terms, and authorized API/SDK connectors for programmatic services. Do not re-expose consumer-login sessions as a new general-purpose third-party API. All model adapters require explicit credentials/permission policy; running CLI as a subprocess is not a license to bypass terms or sandboxing.

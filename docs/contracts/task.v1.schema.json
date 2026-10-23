@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.zenith.invalid/schemas/task.v1.schema.json",
+  "title": "Zenith ACP v1 task envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "task_id", "project_id", "idempotency_key", "objective", "execution", "authorization", "acceptance"],
+  "properties": {
+    "protocol_version": {"const": "zenith.acp.v1"},
+    "task_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "idempotency_key": {"type": "string", "minLength": 12},
+    "objective": {"type": "string", "minLength": 1},
+    "task_type": {"type": "string", "enum": ["engineering", "research", "report", "maintenance", "administrative"]},
+    "input_refs": {"type": "array", "items": {"type": "string"}},
+    "constraints": {"type": "array", "items": {"type": "string"}},
+    "acceptance": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "required": ["kind", "name"], "additionalProperties": false,
+        "properties": {
+          "kind": {"type": "string", "enum": ["command", "artifact", "manual"]},
+          "name": {"type": "string"},
+          "expected": {"type": "string"}
+        }
+      }
+    },
+    "execution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["planner", "implementer", "reviewer", "max_attempts", "max_wall_seconds"],
+      "properties": {
+        "planner": {"type": "string"},
+        "implementer": {"type": "string"},
+        "reviewer": {"type": "string"},
+        "max_attempts": {"type": "integer", "minimum": 1, "maximum": 5},
+        "max_review_cycles": {"type": "integer", "minimum": 0, "maximum": 4},
+        "max_wall_seconds": {"type": "integer", "minimum": 1},
+        "max_budget_usd": {"type": "number", "minimum": 0}
+      }
+    },
+    "authorization": {
+      "type": "object", "additionalProperties": false,
+      "required": ["risk", "allowed_roots", "can_push", "can_deploy"],
+      "properties": {
+        "risk": {"enum": ["L0", "L1", "L2", "L3", "L4"]},
+        "allowed_roots": {"type": "array", "items": {"type": "string"}},
+        "can_push": {"type": "boolean"},
+        "can_deploy": {"type": "boolean"},
+        "can_send_email": {"type": "boolean"}
+      }
+    }
+  }
+}

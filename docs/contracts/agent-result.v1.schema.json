@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.zenith.invalid/schemas/agent-result.v1.schema.json",
+  "title": "Zenith ACP v1 agent result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "task_id", "role", "claimed_status", "summary", "files_changed", "tests_claimed", "artifacts"],
+  "properties": {
+    "protocol_version": {"const": "zenith.acp.v1"},
+    "task_id": {"type": "string", "minLength": 1},
+    "role": {"type": "string", "enum": ["planner", "implementer", "reviewer"]},
+    "claimed_status": {"type": "string", "enum": ["ready_for_verification", "blocked", "failed", "partial"]},
+    "summary": {"type": "string"},
+    "files_changed": {"type": "array", "items": {"type": "string"}},
+    "tests_claimed": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["command_id", "claimed_pass"],
+        "properties": {
+          "command_id": {"type": "string"},
+          "claimed_pass": {"type": "boolean"}
+        }
+      }
+    },
+    "blocking_questions": {"type": "array", "items": {"type": "string"}},
+    "artifacts": {"type": "array", "items": {"type": "string"}}
+  }
+}
