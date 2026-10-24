@@ -41,11 +41,12 @@ scripts/install.sh            # venv in ~/.local/share/zenith/venv, `zenith` lin
 fish_add_path ~/.local/bin    # fish, once (bash/zsh: add ~/.local/bin to PATH)
 zenith doctor --full          # tools, database schema, sandbox baseline, providers (nothing is changed)
 zenith init                   # creates a NEW database; it never migrates an existing one
-zenith                        # Misa
+zenith                        # Misa (offline, deterministic)
+zenith misa --claude          # Misa inside your own Claude Code login (read-only Zenith MCP tools; see docs/plans/MISA_NATIVE_CLAUDE.md)
 ```
 Everyday flow: `zenith project discover --root ~/projects` (dry run) → `… --add 1,3` → `zenith scan --project <id> --all` → `zenith` and ask in Turkish or English. `zenith project inspect --id <id>` shows sources, freshness and verification without touching anything; `zenith project docs --id <id> --allow README.md` lets Misa read a document locally; `--cloud-consent yes` is a *separate* permission for sending that project's context to a model. Misa works fully offline; a model is used only when a conversation adapter is enabled and authorized.
 
-**Conversation provider (milestone finding):** Misa's general conversation uses the Anthropic Messages API with a Console API key (`anthropic-api-conversation`, pay-as-you-go), with the HTTP client running inside the bubblewrap sandbox so Zenith never reads the key. claude.ai subscription/OAuth tokens are **not** brokered for Misa; native Claude Code with your own login stays the separately authorized engineering tool. No live call has been made yet.
+**Conversation provider (owner decision 2026-10-24):** the primary AI experience is `zenith misa --claude`: your own, unmodified Claude Code CLI with its native login, restricted to Zenith's read-only MCP tools and Misa's versioned profile (`docs/plans/MISA_NATIVE_CLAUDE.md`). The sandboxed Anthropic API adapter (`anthropic-api-conversation`, Console key, pay-as-you-go) remains available but disabled; subscription/OAuth tokens are never brokered through it. No API call has been made.
 
 ## Start on Arch Linux (developer checkout)
 

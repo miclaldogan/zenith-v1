@@ -22,6 +22,11 @@ def make_parser() -> argparse.ArgumentParser:
     ms.add_argument("--live-plan", action="store_true", help="print the owner-authorized live conversation test plan; makes no call")
     ms.add_argument("--live-check", metavar="QUESTION", help="ONE authorized live turn on synthetic data (needs --authorize-live-call + ACK)")
     ms.add_argument("--authorize-live-call", action="store_true")
+    ms.add_argument("--claude", action="store_true", help="open Misa inside your own Claude Code CLI (native login; read-only Zenith MCP tools)")
+    ms.add_argument("--resume", action="store_true", help="with --claude: continue the last native Misa session")
+    ms.add_argument("--allow-notes", action="store_true", help="with --claude: expose record_note (Claude Code asks you before each write)")
+    ms.add_argument("--plan", action="store_true", help="with --claude: print the exact launch plan and preflight; start nothing")
+    ms.add_argument("--model", default=None, help="with --claude: model alias/name for the session (default: Claude Code's default)")
     cmds.add_parser("init", help="Create the local SQLite database (never migrates an existing one)")
     dbp = cmds.add_parser("db", help="Database inspection, migration rehearsal and authorized migration")
     dbs = dbp.add_subparsers(dest="db_sub", required=True)
@@ -261,6 +266,9 @@ def main() -> None:
     store = Store()
     try:
         if args.cmd in (None, "misa"):
+            if getattr(args, "claude", False):
+                from .misa.native import launch
+                sys.exit(launch(store, resume=args.resume, allow_notes=args.allow_notes, model=args.model, plan_only=args.plan))
             if getattr(args, "eval", False):
                 import tempfile
                 from .misa import acceptance
