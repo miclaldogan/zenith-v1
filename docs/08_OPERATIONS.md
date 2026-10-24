@@ -17,7 +17,7 @@ From a clean checkout without a venv, `scripts/test.sh` runs the suite from `src
 
 ## Useful commands
 ```bash
-zenith init                       # create or upgrade the database (backup first)
+zenith init                       # create a new database (never migrates an existing one)
 zenith doctor                     # tools + schema_version
 zenith project add --name "Demo" --path /absolute/path/to/demo
 zenith project sources add --project PROJECT_ID --path /another/dir --label notes
@@ -67,7 +67,7 @@ Conversation (primary): ask naturally — "SırdaşApp'te nerede kalmıştık?",
 
 Selection semantics: the **active project** is only ever the one you selected explicitly (`proje <ad>`, or a number from a listing shown *in this session*); the opening also names the project with the most recent evidence but never switches to it. Check-ins go to the active project or to an explicit `not @Proje: …`; a note that names another registered project is refused until you target it. Source names are shown as labels/basenames; `kaynaklar detay` / `sources detail` shows full paths. The verification line states what was verified, at which revision, when, and whether it still applies (`source fresh` / `HEAD moved` / `verified source unavailable` …); an unrelated optional source being unavailable never downgrades a valid verification.
 
-Migration prerequisites for the live database (v1 → v5): stop any running `zenith` process; run `zenith doctor` (expect `schema_version` 1, `schema_expected` 5); run `zenith init` once — it writes `zenith.db.pre-v5-<UTC>.bak` first and migrates v1→v2→v3→v4→v5 in separate transactions; verify with `zenith doctor` (version 5, `source_overlaps []`). Rollback: restore the `.bak` over `zenith.db` (remove `-wal`/`-shm` first); the current code then refuses until `init` is run again. Rehearsed on a byte-copy on 2026-10-23.
+Migration prerequisites for the live database (v1 → v5): stop any running `zenith` process; run `zenith doctor` (expect `schema_version` 1, `schema_expected` 5); run `zenith db migrate --db <path> --confirm-migrate <path>` once — it writes `zenith.db.pre-v<N>-<UTC>.bak` first and applies the pending migrations in separate transactions; verify with `zenith doctor`. Rollback: restore the `.bak` over `zenith.db` (remove `-wal`/`-shm` first); the current code then refuses until the migration is confirmed again. Rehearsed on a byte-copy on 2026-10-23. **Incident 2026-10-23:** the live database was migrated v1→v6 by a plain `zenith init` on the default path; since then `init` is create-only and nothing migrates without the confirmed command above.
 
 ## Engineering runs (fake adapters only — no live model)
 ```bash
@@ -136,15 +136,16 @@ A brief never reports `VERIFIED` unless a passing verification matches the curre
 ## Backup, upgrade and restore
 ```bash
 zenith backup --out ~/zenith-backups/zenith-$(date +%F).db   # consistent even with WAL; refuses to overwrite
-zenith init                                                   # after upgrading Zenith: backup + migrate
+zenith db status                                              # after upgrading Zenith: read-only version/integrity/backups
+zenith db migrate --db PATH --confirm-migrate PATH            # explicit, confirmed upgrade: backup + migrate
 ```
 - Upgrades write `zenith.db.pre-v<N>-<timestamp>.bak` next to the database, apply each migration in one transaction, and roll back on any error (the backup path is in the error message). A process killed mid-upgrade leaves the previous version intact (SQLite journal), and `init` can simply be re-run. Zenith never deletes these backups; remove old ones yourself. If the backup itself fails, the upgrade does not start and the partial backup file is removed.
 - `zenith doctor` reports `schema_version`, `schema_expected` and, when they differ, `schema_action`. The `schema.migrated` event is written right after the migration commits; a crash in that gap loses only the event.
 - Opening a WAL database read-only (`doctor`, `backup`) may create `-wal`/`-shm` sidecar files; they are harmless.
-- Zenith refuses to run on an older schema until `zenith init` is run, and refuses to open a database newer than itself.
-- **Restore** = stop anything using the database, then point `ZENITH_DB_PATH` at the backup copy (or copy it over the live path after moving the live file aside), and run `zenith init`. Do not delete `-wal`/`-shm` files while processes are running.
+- Zenith refuses to run on an older schema until the migration is explicitly confirmed (`zenith db migrate --db PATH --confirm-migrate PATH`); `zenith init` creates new databases only, and a database newer than the code is refused.
+- **Restore** = stop anything using the database, then point `ZENITH_DB_PATH` at the backup copy (or copy it over the live path after moving the live file aside); if the backup is older than the code, migrate it with the confirmed command. Do not delete `-wal`/`-shm` files while processes are running.
 - **Rollback after an upgrade** = stop Zenith; move `zenith.db` (and any `-wal`/`-shm`) aside; copy the `.pre-v<N>-*.bak` file to `zenith.db`; run the previous Zenith version (a newer schema is refused by older code, and vice versa).
-- Rehearse first on a copy: `cp zenith.db /tmp/rehearsal.db && ZENITH_DB_PATH=/tmp/rehearsal.db zenith init && ZENITH_DB_PATH=/tmp/rehearsal.db zenith doctor`.
+- Rehearse first on a copy: `zenith db rehearse --copy-to /tmp/zenith-rehearsal/rehearsal.db` (source opened read-only, hash-checked unchanged; the target must be a new file outside `~/.local/share/zenith`).
 
 ## Service deployment (future)
 - `ops/systemd/` includes a **non-enabled** illustrative service sketch. No unattended worker is installed by this package.

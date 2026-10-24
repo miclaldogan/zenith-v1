@@ -143,6 +143,9 @@ class ConversationEngine:
 
         req = self.assembler.build(text, state, now, lang)
         res = req.pop("_resolution")
+        if res.how == "ambiguous" and req["question_type"] in ("today", "neglected"):
+            res = ctxmod.Resolution()                      # cross-project question that names several projects
+            req.pop("topic_project", None)
         if res.how == "ambiguous":
             names = ", ".join(p["name"] for p in res.candidates[:5])
             return TurnResult(f"Hangisini kastettin: {names}?" if lang == "tr" else f"Which one do you mean: {names}?",
@@ -189,13 +192,14 @@ class ConversationEngine:
             return reply, "deterministic-offline", True
         ctx_dir = None
         if getattr(self.provider.capabilities(), "live", False):
-            # cloud boundary: repository text never leaves the machine without per-project consent
-            stripped = [i for i in request["items"] if i.get("local_only")]
-            if stripped:
-                request = {**request, "items": [i for i in request["items"] if not i.get("local_only")]}
-                request["instructions"] = request["instructions"] + [
-                    f"{len(stripped)} repository-text item(s) were withheld: the project has no cloud consent."]
-                state["last_withheld"] = len(stripped)
+            request, refusal = self.cloud_filter(request, state)
+            if refusal is not None:
+                # the topic project has no cloud consent: answer locally, say so, never call the provider
+                reply = validate("conversation_reply", self.offline.respond(RunContext("offline", "conversation", 1), ctxmod.validated(req)))
+                reply["text"] = refusal + " " + reply["text"]
+                reply["uncertainty"].append("cloud_sharing_disabled")
+                state["last_grounding"] = assess_grounding(reply, ctxmod.validated(req))
+                return reply, "deterministic-offline", True
         try:
             ctx_dir = self._context_dir(request)
             ctx = RunContext(run_id=f"conv-{request['generated_at']}", stage="conversation", deadline_seconds=90.0, read_root=ctx_dir)
@@ -229,6 +233,63 @@ class ConversationEngine:
             if a.get("type") not in request["allowed_actions"]:
                 reply["actions"] = [x for x in reply["actions"] if x is not a]
         return reply, f"model:{self.provider.name}", True
+
+    # ---- cloud boundary ----------------------------------------------------------------------
+    def cloud_filter(self, request: dict, state: dict) -> tuple[dict, str | None]:
+        """Fail-closed, project-scoped sharing for live providers.
+
+        Nothing about a project reaches an external provider unless that project's `cloud_consent`
+        is set: its card, tasks, decisions, evidence, notes, observations, documents, conversation
+        turns that mention it, cross-project comparisons and the derived summary. If the topic (or
+        comparison) project is not consented the provider is not called at all and a local answer is
+        given instead. Non-consented project names are redacted from the owner's question.
+        """
+        lang = request["language"]
+        all_projects = self.store.list_projects()
+        consent = {p["id"]: self.store.project_settings(p["id"])["cloud_consent"] for p in all_projects}
+        name_to_id = {p["name"]: p["id"] for p in all_projects}
+        blocked_names = sorted((n for n, i in name_to_id.items() if not consent.get(i)), key=len, reverse=True)
+
+        def allowed(name: str | None) -> bool:
+            return bool(name) and consent.get(name_to_id.get(name, ""), False)
+
+        topic = request.get("topic_project")
+        if topic and not consent.get(topic["id"]):
+            return request, (f"({topic['name']} için bulut paylaşımı kapalı; bu cevabı modele sormadan, kayıtlardan verdim.)"
+                             if lang == "tr" else
+                             f"({topic['name']} has no cloud sharing consent; answered locally from records, no model involved.)")
+        comp = request.get("compare_project")
+        if comp and not consent.get(comp["id"]):
+            return request, (f"({comp['name']} için bulut paylaşımı kapalı; karşılaştırmayı modele sormadım.)" if lang == "tr"
+                             else f"({comp['name']} has no cloud sharing consent; the comparison was not sent to a model.)")
+        out = dict(request)
+        out["projects"] = [c for c in request["projects"] if consent.get(c["id"])]
+        kept = [i for i in request["items"] if allowed(i.get("project")) and not (i.get("local_only") and not allowed(i.get("project")))]
+        withheld = len(request["items"]) - len(kept)
+        out["items"] = kept
+        if "active_project" in request and not consent.get(request["active_project"]["id"]):
+            out.pop("active_project")
+        # conversation history is sensitive: only turns that name the consented topic and no other project
+        turns = []
+        for t in request.get("recent_turns", []):
+            text = t["text"].lower()
+            if topic and topic["name"].lower() in text and not any(n.lower() in text for n in blocked_names if n != topic["name"]):
+                turns.append(t)
+        out["recent_turns"] = turns
+        if "summary" in out and not all(consent.values()):
+            out.pop("summary")
+        if "focus_ids" in out:
+            keep_ids = {i["id"] for i in kept}
+            out["focus_ids"] = [f for f in out["focus_ids"] if f in keep_ids]
+        q = request["question"]
+        for n in blocked_names:
+            q = re.sub(re.escape(n), "[proje]" if lang == "tr" else "[project]", q, flags=re.I)
+        out["question"] = q
+        if withheld or len(out["projects"]) < len(request["projects"]):
+            out["instructions"] = request["instructions"] + [
+                f"{withheld} item(s) and {len(request['projects']) - len(out['projects'])} project(s) were withheld: no cloud consent."]
+            state["last_withheld"] = withheld
+        return out, None
 
     def _context_dir(self, request: dict) -> Path:
         root = Path(tempfile.mkdtemp(prefix="misa-ctx-", dir=str(self.state_root) if self.state_root.exists() else None))

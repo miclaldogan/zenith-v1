@@ -22,7 +22,18 @@ def make_parser() -> argparse.ArgumentParser:
     ms.add_argument("--live-plan", action="store_true", help="print the owner-authorized live conversation test plan; makes no call")
     ms.add_argument("--live-check", metavar="QUESTION", help="ONE authorized live turn on synthetic data (needs --authorize-live-call + ACK)")
     ms.add_argument("--authorize-live-call", action="store_true")
-    cmds.add_parser("init", help="Initialize the local SQLite database")
+    cmds.add_parser("init", help="Create the local SQLite database (never migrates an existing one)")
+    dbp = cmds.add_parser("db", help="Database inspection, migration rehearsal and authorized migration")
+    dbs = dbp.add_subparsers(dest="db_sub", required=True)
+    st = dbs.add_parser("status", help="Read-only: version, integrity, backups, pending migrations")
+    st.add_argument("--db", help="database file (default: the configured database)")
+    rh = dbs.add_parser("rehearse", help="Copy the database to a NEW file in a scratch directory and migrate the copy")
+    rh.add_argument("--copy-to", required=True, metavar="FILE", help="new file outside the user data directory")
+    rh.add_argument("--db", help="source database (default: the configured database); never modified")
+    mg = dbs.add_parser("migrate", help="Authorized in-place upgrade of an existing database (backup first)")
+    mg.add_argument("--db", required=True, metavar="FILE", help="the exact database file to upgrade (no default)")
+    mg.add_argument("--confirm-migrate", required=True, metavar="FILE",
+                    help="repeat the same path verbatim to confirm; anything else is refused")
     dr0 = cmds.add_parser("doctor", help="Read-only health check: tools, database, providers, sandbox, install")
     dr0.add_argument("--full", action="store_true", help="also probe the sandbox and list provider configuration")
 
@@ -270,7 +281,20 @@ def main() -> None:
             from .misa.repl import main as misa_main
             sys.exit(misa_main(store, getattr(args, "once", None)))
         if args.cmd == "init":
-            output({"db_path": store.init(), "initialized": True})
+            existed = store.db_path.exists()
+            path = store.init()
+            output({"db_path": path, "initialized": not existed,
+                    "note": "already initialized at the current schema; nothing changed" if existed else "created"})
+        elif args.cmd == "db":
+            target = Store(args.db) if getattr(args, "db", None) else store
+            if args.db_sub == "status":
+                output(target.inspect())
+            elif args.db_sub == "rehearse":
+                output(target.rehearse(args.copy_to))
+            elif args.db_sub == "migrate":
+                if args.confirm_migrate != args.db:
+                    raise ZenithError("Migration not confirmed: --confirm-migrate must repeat --db verbatim; nothing was changed")
+                output(target.migrate(args.confirm_migrate))
         elif args.cmd == "doctor":
             version = store.schema_version()
             from .migrations import LATEST_VERSION
@@ -279,7 +303,10 @@ def main() -> None:
                       "db_path": str(store.db_path),
                       "schema_version": version, "schema_expected": LATEST_VERSION,
                       "schema_action": (None if version in (None, LATEST_VERSION)
-                                        else "run `zenith init` to upgrade (backup is written first)"),
+                                        else "schema upgrade required: `zenith db status`, rehearse with "
+                                             "`zenith db rehearse --copy-to DIR/rehearsal.db`, then "
+                                             f"`zenith db migrate --db {store.db_path} --confirm-migrate {store.db_path}` "
+                                             "(nothing migrates implicitly; backup is written first)"),
                       "source_overlaps": overlaps,
                       "tools": {x: bool(shutil.which(x)) for x in ("git", "tmux", "hyprctl", "claude", "codex", "bwrap")},
                       "install": {"zenith_on_path": shutil.which("zenith"), "python": sys.executable},

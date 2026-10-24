@@ -162,8 +162,10 @@ def live_check(store: Store, question: str, provider_name: str, authorize: bool)
         raise ZenithError("Live call refused: " + "; ".join(blockers))
     base = Path(tempfile.mkdtemp(prefix="misa-live-check-"))
     world = build_world(base)
+    smoke_store = Store(world["db"])
+    smoke_store.set_project_settings(world["harbor"], cloud_consent=True)   # synthetic project only
     out: list[str] = []
-    session = MisaSession(Store(world["db"]), out=out.append, provider=adapter, state_root=base)
+    session = MisaSession(smoke_store, out=out.append, provider=adapter, state_root=base)
     session.state = {"language": "tr"}
     reply, _ = session.handle(question)
     turns = Store(world["db"]).list_turns()
@@ -191,8 +193,14 @@ def live_plan() -> dict:
         "data_visible_to_provider": "ONLY /work/request.json: the question, project cards (name, status, source labels), "
                                     "≤ 40 context items (summaries ≤ 300 chars, ids, dates, epistemic tags), ≤ 8 relevant past turns, "
                                     "instructions. No repository files, no paths, no credentials. Synthetic acceptance DB only.",
-        "interactions": "8 model turns (scenarios A: 2, B: 2 + 'kaynakları göster' is local, C: 3) → budget cap 0.50 USD-equivalent total "
-                        "(subscription usage, not a bill); stage deadline 90 s each; max 2 provider calls per turn.",
+        "interactions": "FIRST: exactly 1 request (`zenith misa --live-check`); the 8-turn eval needs a separate authorization.",
+        "request_format": "POST /v1/messages, headers x-api-key + anthropic-version 2026-10-21; body {model, max_tokens 1200, system (reply "
+                          "JSON schema), messages[1 user]} — temperature/top_p/top_k are never sent (removed in this API version).",
+        "project_sharing": "fail-closed per project: the synthetic 'Harbor' project is created with cloud_consent=true for the check; "
+                           "nothing else exists in that throwaway DB; with real projects, only cloud_consent=yes projects ever reach the provider.",
+        "expected_tokens": "≈ 2.5–5k input (request.json) + ≤ 1.2k output ≈ a few cents on pay-as-you-go pricing.",
+        "timeout": "90 s turn deadline (client timeout 85 s); on timeout the process group is killed, the turn is recorded as failed, no retry.",
+        "cancellation": "Ctrl-C ends the session with state saved; a should_cancel flag kills the sandboxed client.",
         "security": "bubblewrap provider profile: unshared network, egress only to api.anthropic.com:443 through the allowlist proxy "
                     "(denials logged), read-only context dir, no code tools (--restricted, forbidden-tool kill switch), tmpfs HOME. "
                     "No writes: notes proposed by the model are only staged and the script never confirms them.",

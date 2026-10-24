@@ -150,12 +150,13 @@ class SettingsAndRepoTextTests(Base):
                 return {"text": "ok", "cited_ids": [], "uncertainty": ["nothing_pending"], "actions": [], "needs_clarification": False}
         spy = Spy()
         s = MisaSession(self.store, out=lambda _: None, provider=spy)
-        s.handle("Harbor'da nerede kalmıştık?")
-        self.assertFalse(any(i["kind"] in ("commit", "doc") for i in spy.seen["items"]))      # withheld: no consent
-        self.assertTrue(any("withheld" in x for x in spy.seen["instructions"]))
+        reply, _ = s.handle("Harbor'da nerede kalmıştık?")
+        self.assertIsNone(spy.seen)                                                             # no consent: no call at all
+        self.assertIn("bulut paylaşımı kapalı", reply)
         self.store.set_project_settings(self.p, cloud_consent=True)
         s.handle("Harbor'da nerede kalmıştık?")
         self.assertTrue(any(i["kind"] == "doc" for i in spy.seen["items"]))                   # consent given: shared
+        self.assertNotIn("TOKEN=abc", json.dumps(spy.seen))
 
 
 class FakeAnthropic(http.server.BaseHTTPRequestHandler):

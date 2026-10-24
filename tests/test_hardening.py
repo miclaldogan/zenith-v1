@@ -73,7 +73,10 @@ class Base(unittest.TestCase):
 class MigrationV3Tests(Base):
     def test_v1_to_latest_preserves_every_table(self):
         path = self.legacy_db(1)
-        Store(path).init()
+        with self.assertRaises(ZenithError):
+            Store(path).init()           # init never migrates existing data
+        self.assertEqual(migrations.current_version(sqlite3.connect(path)), 1)
+        Store(path).migrate(confirm=str(path))
         con = sqlite3.connect(path)
         self.assertEqual(migrations.current_version(con), migrations.LATEST_VERSION)
         self.assertEqual(con.execute("SELECT name FROM projects").fetchone()[0], "Legacy")
@@ -97,7 +100,7 @@ class MigrationV3Tests(Base):
         self.assertEqual(migrations.current_version(con), 2)
         self.assertNotIn("seq", [r[1] for r in con.execute("PRAGMA table_info(evidence)")])
         con.close()
-        Store(path).init()
+        Store(path).migrate(confirm=str(path))
         con = sqlite3.connect(path)
         rows = con.execute("SELECT seq, summary FROM evidence ORDER BY recorded_at").fetchall()
         self.assertEqual(rows, [(1, "first"), (2, "second")])
@@ -128,7 +131,7 @@ migrations.apply_pending({str(path)!r})
         self.assertEqual(con.execute("SELECT count(*) FROM tasks").fetchone()[0], 1)
         con.close()
         self.assertEqual(len(list(self.root.glob("legacy-v1.db.pre-v*.bak"))), 1)  # kept, not deleted
-        Store(path).init()  # the retry completes from the intact v1 state
+        Store(path).migrate(confirm=str(path))  # the retry completes from the intact v1 state
         self.assertEqual(Store(path).get_project("p1")["name"], "Legacy")
 
     def test_restore_rehearsal_from_backup_copy(self):
@@ -161,7 +164,7 @@ migrations.apply_pending({str(path)!r})
             migrations.backup_database(path, self.root / "partial.db")
         self.assertFalse((self.root / "partial.db").exists())
         with self.assertRaises((ZenithError, sqlite3.DatabaseError, migrations.MigrationError)):
-            Store(path).init()
+            Store(path).migrate(confirm=str(path))
         self.assertEqual(path.read_bytes(), bytes(data))  # the damaged file was not touched
 
 
@@ -383,10 +386,11 @@ class CliHardeningTests(unittest.TestCase):
             env = {**os.environ, "ZENITH_DB_PATH": str(db), "PYTHONPATH": SRC}
             doc = json.loads(self.run_cli(env, "doctor").stdout)
             self.assertEqual(doc["schema_version"], 1)
-            self.assertIn("zenith init", doc["schema_action"])
+            self.assertIn("zenith db migrate", doc["schema_action"])
             r = self.run_cli(env, "project", "list")
             self.assertEqual(r.returncode, 2)
-            self.assertIn("zenith init", r.stderr)
+            self.assertIn("zenith db migrate", r.stderr)
+            self.assertIn("Nothing was changed", r.stderr)
             self.assertNotIn("Traceback", r.stderr)
             db.write_bytes(b"this is not a database file" * 100)
             r = self.run_cli(env, "project", "list")

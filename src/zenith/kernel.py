@@ -22,6 +22,26 @@ class ZenithError(Exception):
     """User-facing validation or state error."""
 
 
+class MigrationRequired(ZenithError):
+    """The database exists at an older schema. Nothing migrates it implicitly."""
+
+    def __init__(self, db_path: Path, found: int, needed: int):
+        self.db_path, self.found, self.needed = Path(db_path), found, needed
+        super().__init__(
+            f"Database schema is v{found}, this Zenith needs v{needed}. Nothing was changed. "
+            f"Inspect: `zenith db status`; rehearse on a copy: `zenith db rehearse --copy-to DIR/rehearsal.db`; "
+            f"then upgrade in place (backup written first): "
+            f"`zenith db migrate --db {db_path} --confirm-migrate {db_path}`")
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 RISK_LEVELS = ("L0", "L1", "L2", "L3", "L4")
 TRANSITIONS = {
     "DRAFT": {"CONTEXT_READY", "CANCELLED"},
@@ -118,10 +138,11 @@ class Store:
             con.execute("PRAGMA foreign_keys=ON")
             con.execute(f"PRAGMA busy_timeout={int(self.BUSY_TIMEOUT_MS)}")
             version = migrations.current_version(con)
+            if version > migrations.LATEST_VERSION:
+                raise ZenithError(f"Database schema v{version} is newer than this Zenith "
+                                  f"(v{migrations.LATEST_VERSION}); refusing to downgrade")
             if version != migrations.LATEST_VERSION:
-                raise ZenithError(f"Database schema is v{version}, this Zenith needs "
-                                  f"v{migrations.LATEST_VERSION}. Run `zenith init` to upgrade "
-                                  "(a backup is written first).")
+                raise MigrationRequired(self.db_path, version, migrations.LATEST_VERSION)
             yield con
         finally:
             con.close()
@@ -140,23 +161,141 @@ class Store:
             con.execute("COMMIT")
 
     def init(self) -> str:
-        """Create the database or upgrade it in place (backup first, rollback on failure)."""
+        """Create a new database at the latest schema. Never migrates an existing one.
+
+        An existing database at the current version is left untouched (idempotent). An existing
+        database at an older version is refused: upgrading real data is a separate, explicitly
+        confirmed step (`migrate`, after `inspect`/`rehearse`).
+        """
         self.db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Prevent trivially exposing project metadata on a shared filesystem.
         if self.db_path.exists() and self.db_path.is_symlink():
             raise ZenithError("Refusing symlinked database path")
+        if self.db_path.exists():
+            version = self.schema_version() or 0
+            if version > migrations.LATEST_VERSION:
+                raise ZenithError(f"Database schema v{version} is newer than this Zenith "
+                                  f"(v{migrations.LATEST_VERSION}); refusing to downgrade")
+            if version != migrations.LATEST_VERSION:
+                raise MigrationRequired(self.db_path, version, migrations.LATEST_VERSION)
+            self.db_path.chmod(0o600)
+            return str(self.db_path)
+        try:
+            outcome = migrations.apply_pending(self.db_path, backup=False)
+        except migrations.MigrationError as exc:
+            raise ZenithError(str(exc)) from exc
+        self.db_path.chmod(0o600)
+        with self.write() as con:
+            _record_event(con, "system", "schema", "schema.migrated",
+                          {"from": outcome["from"], "to": outcome["to"], "backup": None}, actor="zenith")
+        return str(self.db_path)
+
+    def inspect(self) -> dict:
+        """Read-only description of the database file: version, integrity, backups, pending migrations."""
+        path = self.db_path
+        report: dict = {"db_path": str(path), "exists": path.exists(), "schema_expected": migrations.LATEST_VERSION,
+                        "schema_version": None, "pending_migrations": [], "integrity": None,
+                        "tables": None, "backups": sorted(b.name for b in path.parent.glob(f"{path.name}.pre-v*.bak"))
+                        if path.parent.is_dir() else [], "action": None}
+        if not path.exists():
+            report["action"] = "run `zenith init` to create it"
+            return report
+        if path.is_symlink():
+            report["action"] = "symlinked database path; refusing"
+            return report
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+        try:
+            version = migrations.current_version(con)
+            report["schema_version"] = version
+            report["integrity"] = con.execute("PRAGMA integrity_check").fetchone()[0]
+            report["foreign_key_violations"] = len(con.execute("PRAGMA foreign_key_check").fetchall())
+            report["tables"] = [r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+            if version == migrations.LATEST_VERSION:
+                try:
+                    report["projects"] = con.execute("SELECT count(*) FROM projects").fetchone()[0]
+                    report["tasks"] = con.execute("SELECT count(*) FROM tasks").fetchone()[0]
+                except sqlite3.Error:
+                    pass
+        finally:
+            con.close()
+        report["pending_migrations"] = [f"v{v} {name}" for v, name, _ in migrations.MIGRATIONS if v > version]
+        if version > migrations.LATEST_VERSION:
+            report["action"] = "database is newer than this Zenith; upgrade Zenith"
+        elif version < migrations.LATEST_VERSION:
+            report["action"] = (f"schema upgrade v{version}->v{migrations.LATEST_VERSION} required: rehearse on a copy "
+                                f"(`zenith db rehearse --copy-to DIR/rehearsal.db`), then "
+                                f"`zenith db migrate --db {path} --confirm-migrate {path}`")
+        return report
+
+    def rehearse(self, copy_to: Path | str) -> dict:
+        """Migrate a disposable copy. The source is opened read-only and must be byte-identical afterwards.
+
+        Fails closed when the copy could land on, beside or over the live database: the target must be
+        a new file outside the default data directory and distinct from the source.
+        """
+        dest = Path(copy_to).expanduser()
+        if not self.db_path.exists():
+            raise ZenithError("Database not initialized. Run `zenith init`.")
+        src_real = self.db_path.resolve()
+        live_dir = default_db_path().expanduser().resolve().parent
+        dest_real = dest.resolve()
+        if dest.exists() or dest_real == src_real:
+            raise ZenithError(f"Rehearsal target must be a new file (refusing {dest})")
+        if dest_real == default_db_path().expanduser().resolve() or live_dir == dest_real.parent or live_dir in dest_real.parents:
+            raise ZenithError(f"Rehearsal target must be outside the user data directory {live_dir} "
+                              f"(refusing {dest}); use a scratch directory")
+        if dest_real.parent == src_real.parent:
+            raise ZenithError("Rehearsal target must not sit next to the source database; use a scratch directory")
+        if not dest.parent.is_dir():
+            raise ZenithError("Rehearsal directory does not exist")
+        before = _sha256(self.db_path)
+        try:
+            migrations.backup_database(self.db_path, dest)   # source opened read-only
+            outcome = migrations.apply_pending(dest, backup=False)
+        except migrations.MigrationError as exc:
+            raise ZenithError(str(exc)) from exc
+        after = _sha256(self.db_path)
+        if before != after:
+            raise ZenithError("Rehearsal invariant violated: source database changed; investigate before migrating")
+        con = sqlite3.connect(f"file:{dest}?mode=ro", uri=True, timeout=5)
+        try:
+            integrity = con.execute("PRAGMA integrity_check").fetchone()[0]
+            fk = len(con.execute("PRAGMA foreign_key_check").fetchall())
+        finally:
+            con.close()
+        return {"source": str(self.db_path), "source_sha256_unchanged": True, "copy": str(dest),
+                "from": outcome["from"], "to": outcome["to"], "copy_integrity": integrity,
+                "copy_foreign_key_violations": fk, "note": "Disposable copy only; the source was not modified."}
+
+    def migrate(self, confirm: str | None) -> dict:
+        """Authorized in-place upgrade of an existing database (backup first, rollback on failure).
+
+        `confirm` must be the database path itself, repeated verbatim by the owner; an environment
+        variable or a default path is not an authorization.
+        """
+        if not self.db_path.exists():
+            raise ZenithError("Database does not exist; `zenith init` creates a new one")
+        if self.db_path.is_symlink():
+            raise ZenithError("Refusing symlinked database path")
+        if not confirm or Path(confirm).expanduser() != self.db_path:
+            raise ZenithError(f"Migration not confirmed: pass --confirm-migrate {self.db_path} "
+                              "(the exact database path) to upgrade this database in place")
+        version = self.schema_version() or 0
+        if version == migrations.LATEST_VERSION:
+            return {"db_path": str(self.db_path), "from": version, "to": version, "backup": None,
+                    "note": "already at the current schema; nothing done"}
         try:
             outcome = migrations.apply_pending(self.db_path)
         except migrations.MigrationError as exc:
             raise ZenithError(str(exc)) from exc
         self.db_path.chmod(0o600)
-        if outcome["from"] != outcome["to"]:
-            with self.write() as con:
-                _record_event(con, "system", "schema", "schema.migrated",
-                              {"from": outcome["from"], "to": outcome["to"],
-                               "backup": Path(outcome["backup"]).name if outcome["backup"] else None},
-                              actor="zenith")
-        return str(self.db_path)
+        with self.write() as con:
+            _record_event(con, "system", "schema", "schema.migrated",
+                          {"from": outcome["from"], "to": outcome["to"],
+                           "backup": Path(outcome["backup"]).name if outcome["backup"] else None},
+                          actor="zenith")
+        return {"db_path": str(self.db_path), **outcome}
 
     def schema_version(self) -> int | None:
         """Read-only probe used by `doctor`; None when the database does not exist."""
@@ -179,9 +318,10 @@ class Store:
             migrations.backup_database(self.db_path, dest)
         except migrations.MigrationError as exc:
             raise ZenithError(str(exc)) from exc
-        with self.write() as con:
-            _record_event(con, "system", "database", "db.backup_created",
-                          {"file": dest.name, "bytes": dest.stat().st_size}, actor="zenith")
+        if self.schema_version() == migrations.LATEST_VERSION:   # an older database is copied but never written
+            with self.write() as con:
+                _record_event(con, "system", "database", "db.backup_created",
+                              {"file": dest.name, "bytes": dest.stat().st_size}, actor="zenith")
         return str(dest)
 
     # ---- projects and sources -------------------------------------------------------------

@@ -40,7 +40,7 @@ git clone https://github.com/miclaldogan/zenith-v1 ~/src/zenith-v1 && cd ~/src/z
 scripts/install.sh            # venv in ~/.local/share/zenith/venv, `zenith` linked into ~/.local/bin, fish completions
 fish_add_path ~/.local/bin    # fish, once (bash/zsh: add ~/.local/bin to PATH)
 zenith doctor --full          # tools, database schema, sandbox baseline, providers (nothing is changed)
-zenith init                   # creates or upgrades the database (backup first) — upgrading an existing DB needs your go-ahead
+zenith init                   # creates a NEW database; it never migrates an existing one
 zenith                        # Misa
 ```
 Everyday flow: `zenith project discover --root ~/projects` (dry run) → `… --add 1,3` → `zenith scan --project <id> --all` → `zenith` and ask in Turkish or English. `zenith project inspect --id <id>` shows sources, freshness and verification without touching anything; `zenith project docs --id <id> --allow README.md` lets Misa read a document locally; `--cloud-consent yes` is a *separate* permission for sending that project's context to a model. Misa works fully offline; a model is used only when a conversation adapter is enabled and authorized.
@@ -71,7 +71,7 @@ scripts/test.sh
 
 Alternatively, `bash scripts/bootstrap.sh` runs setup and tests without launching external agents (it needs network once, to fetch setuptools for the editable install). `scripts/test.sh` works from a clean checkout with **no installation and no network**: it uses `.venv` when present and otherwise runs straight from `src/`. For a dependency-free first check, `PYTHONPATH=src python -m zenith doctor`.
 
-The SQLite database defaults to `${XDG_DATA_HOME:-~/.local/share}/zenith/zenith.db`. Override with `ZENITH_DB_PATH=/path/to/zenith.db`. Zenith does not modify registered projects. If you upgrade from an older database, `zenith doctor` says so; run `zenith init` once: it backs the database up (`zenith.db.pre-v<N>-<time>.bak`) and migrates it in place. See `docs/08_OPERATIONS.md` for the rollback procedure.
+The SQLite database defaults to `${XDG_DATA_HOME:-~/.local/share}/zenith/zenith.db`. Override with `ZENITH_DB_PATH=/path/to/zenith.db`. Zenith does not modify registered projects. If you upgrade Zenith and your database is older, every command refuses with `Nothing was changed` until you migrate explicitly: inspect with `zenith db status` (read-only), rehearse on a disposable copy with `zenith db rehearse --copy-to DIR/rehearsal.db` (the copy must live outside the data directory), then upgrade in place with `zenith db migrate --db PATH --confirm-migrate PATH` (same path twice; a backup `zenith.db.pre-v<N>-<time>.bak` is written first). `zenith init`, `ZENITH_DB_PATH` and the default path never authorize a migration. See `docs/08_OPERATIONS.md` for rollback.
 
 ## Handoff to your local coding agent
 

@@ -367,6 +367,7 @@ class AnthropicApiConversation:
         self.allowed_hosts = {h.strip() for h in hosts if h.strip()}
         self.allow_private_hosts = bool(cfg.get("allow_private_hosts", False))   # tests only
         self.max_tokens = int(cfg.get("max_tokens", 1200))
+        self.ca_bundle = cfg.get("ca_bundle")                                   # tests: a local trusted test CA
         self.caps = cfg.get("caps")
         self.requests: list[dict] = []
 
@@ -430,6 +431,9 @@ class AnthropicApiConversation:
             elif line:
                 ctx.emit("provider.stderr", {"line": line[:300]})
         env = {"ANTHROPIC_BASE_URL": self.base_url, "ANTHROPIC_TIMEOUT": str(int(ctx.deadline_seconds) - 5 if ctx.deadline_seconds > 10 else 5)}
+        if self.ca_bundle:                                          # test CA travels with the request document
+            shutil.copyfile(self.ca_bundle, in_dir / "ca.pem")
+            env["ANTHROPIC_CA_BUNDLE"] = "/run/zenith/in/ca.pem"
         try:
             with AllowlistProxy(sock_dir / "proxy.sock", self.allowed_hosts, audit=ctx.emit, allow_private=self.allow_private_hosts) as proxy:
                 profile = sb.SandboxProfile("provider", proxy_socket=proxy.socket_path,

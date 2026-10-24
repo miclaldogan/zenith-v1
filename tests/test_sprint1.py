@@ -65,9 +65,13 @@ class MigrationTests(Base):
     def test_schema_upgrade_preserves_existing_state(self):
         path = self.legacy_db()
         store = Store(path)
-        with self.assertRaisesRegex(ZenithError, "zenith init"):
+        with self.assertRaisesRegex(ZenithError, "zenith db migrate"):
             store.list_projects()  # refuses to run on an un-upgraded schema
-        store.init()
+        with self.assertRaisesRegex(ZenithError, "zenith db migrate"):
+            store.init()           # and init does not upgrade it either
+        with self.assertRaisesRegex(ZenithError, "not confirmed"):
+            store.migrate(confirm=None)
+        store.migrate(confirm=str(path))
         p = store.get_project("p1")
         self.assertEqual((p["name"], p["path"]), ("Legacy", str(self.repo)))
         self.assertEqual(len(p["sources"]), 1)
@@ -106,7 +110,7 @@ class MigrationTests(Base):
         self.assertEqual(con.execute("SELECT path FROM projects").fetchone()[0], str(self.repo))
         self.assertEqual(len(list(self.root.glob("legacy.db.pre-v2-*.bak"))), 1)
         # A later, healthy upgrade still succeeds from the intact v1 state.
-        Store(path).init()
+        Store(path).migrate(confirm=str(path))
         self.assertEqual(Store(path).get_project("p1")["name"], "Legacy")
 
     def test_later_failed_migration_leaves_previous_version(self):

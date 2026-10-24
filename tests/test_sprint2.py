@@ -243,7 +243,7 @@ class MigrationV4Tests(Base):
           INSERT INTO approvals VALUES ('a1','t1','oldhash','owner','2099-01-01T00:00:00+00:00','2026-01-02T00:00:00+00:00');
         """ % self.repo)
         con.commit(); con.close()
-        Store(path).init()
+        Store(path).migrate(confirm=str(path))
         con = sqlite3.connect(path)
         self.assertEqual(migrations.current_version(con), migrations.LATEST_VERSION)
         self.assertEqual(con.execute("SELECT operation,max_uses,use_count,project_id FROM approvals").fetchone(),
