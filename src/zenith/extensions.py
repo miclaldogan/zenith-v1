@@ -50,6 +50,11 @@ def _claude_conversation(script=None):
     return ClaudeCodeConversation(script)
 
 
+def _ollama_conversation(script=None):
+    from .misa.ollama import OllamaConversation
+    return OllamaConversation(script)
+
+
 def _api_conversation(script=None):
     from .misa.conversation import AnthropicApiConversation
     return AnthropicApiConversation(script)
@@ -72,6 +77,9 @@ _BUILTIN = (
     AdapterManifest("codex-implementer", "implementer", SCHEMA_VERSION, CodexImplementer, live=True,
                     permissions=("unsupported:autonomous-execution",), version="cli-0.162.1-verified"),
     AdapterManifest("fake-conversation", "conversation", SCHEMA_VERSION, _fake_conversation, live=False),
+    # Local open-weight inference (Gemma via Ollama on loopback): not a cloud provider, no consent gate.
+    AdapterManifest("ollama-conversation", "conversation", SCHEMA_VERSION, _ollama_conversation, live=False,
+                    permissions=("network:loopback",)),
     AdapterManifest("claude-code-conversation", "conversation", SCHEMA_VERSION, _claude_conversation, live=True,
                     permissions=("network:api.anthropic.com:443", "credentials:anthropic-api-key-only", "context:read-only"),
                     version="cli-2.1.309-verified"),

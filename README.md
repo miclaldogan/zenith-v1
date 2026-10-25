@@ -1,123 +1,165 @@
-# ZENITH v1.0 — Personal Intelligence & Agent Orchestration
+# Zenith
 
-> Status: architecture baseline + safe, runnable Sprint-0 kernel. **Not** a finished autonomous agent.
->
-> Date: 2026-10-23 · Target: Arch Linux / Hyprland · Python 3.12+
+**I was too lazy to manage my AI agents, so I built an AI to manage them.**
 
-Zenith is an independent personal project intelligence and multi-agent orchestration system. Its source of truth is **its own project registry, task/event store, evidence, and approval policy**—not Claude Code or Codex chat history. Agents are replaceable, bounded workers.
+Zenith is an open-source, **local-first personal intelligence and agent-orchestration platform**. It remembers
+your projects with evidence and provenance, tells you where you left off, coordinates coding agents inside hard
+boundaries, verifies their claims independently, and never acts without your approval. **Misa** is the assistant
+you talk to on top of it, in Turkish or English, offline by default, with an optional **local open-weight model
+(Google Gemma via Ollama)** for natural reasoning and your own **Claude Code** login for engineering work.
 
-## What works (Sprint 0 + Sprint 1)
+Everything is a single Python package with **zero dependencies** (SQLite, stdlib only), tested by 243 unit and
+integration tests, running on Linux.
 
-- SQLite-backed registry and append-only event log; numbered schema migrations (now **v3**) with an automatic backup before any upgrade and rollback on failure. Events and evidence are protected by database triggers against edits and deletes from ordinary application code (not against a privileged local user).
-- Projects with a stable ID and **many sources** (directories). Paths can be added, moved and detached without changing project or task IDs; a directory can belong to only one source and sources never nest (parent/child paths are refused, in code and by trigger).
-- Read-only metadata scanner: Git branch/HEAD/tracked-change count plus a file-metadata fingerprint (path, size, mtime — never contents). Symlinks are never followed; `.env`, keys, credentials and `.ssh`-style directories are skipped and only counted. Bounded by file count (20 000) and time (10 s).
-- Snapshot comparison: repeated identical scans are deduplicated; `project sources diff` shows the actual HEAD change (with commit count) or "files changed without a commit".
-- Evidence ledger with provenance (`HUMAN_REPORT`, `REPOSITORY_OBSERVATION`, `TEST_VERIFICATION`, `DOCUMENT`, `MODEL_INFERENCE`), observation time, node, confidence and a gap-free recording sequence. Confidence is derived from origin in code and constrained in the database; rows are append-only. Timestamps are microsecond UTC. The CLI can only attach `HUMAN_REPORT`, `DOCUMENT` and `MODEL_INFERENCE`.
-- Check-ins (`zenith checkin`) are stored as `REPORTED`, redacted for obvious credentials, and reconciled against later evidence when back-dated from another machine.
-- Tasks: deadlines (stored UTC, shown in Europe/Istanbul; a bare date means end of that day), dependencies (a task with unfinished dependencies cannot be queued; cycles rejected), and filtered listings (`--open --overdue --due-within --blocked --state`).
-- `zenith brief`: deterministic, evidence-cited status (`UNKNOWN`, `REPORTED_ONLY`, `OBSERVED`, `VERIFIED`, `VERIFICATION_STALE`, `VERIFICATION_FAILING`) with unknowns and next actions. No model, no network.
-- `zenith backup --out FILE` using the SQLite backup API (never overwrites).
-- Stdlib-only; offline tests; no network or automatic code execution.
+```
+                 you  ──────────────  "Harbor'da nerede kalmıştık?"
+                  │
+          ┌───────▼────────┐   conversation port (provider-independent)
+          │     MISA       │──► offline composer (deterministic, always available)
+          │  intents ·     │──► Gemma via Ollama  (local, open-weight, nothing leaves the machine)
+          │  context ·     │──► your Claude Code login (native CLI, read-only MCP tools)
+          │  grounding     │──► Anthropic API adapter (sandboxed; present, disabled)
+          └───────┬────────┘
+                  │ bounded, evidence-tagged context          grounding validator ⇐ every model reply
+          ┌───────▼─────────────────────────────────────────────────────────┐
+          │                        ZENITH CORE  (SQLite, append-only)      │
+          │ projects · sources · evidence ledger (VERIFIED/OBSERVED/        │
+          │ REPORTED/INFERRED) · tasks & dependencies · decisions · briefs  │
+          │ execution runs · leases · approvals (scope-hashed, single-use)  │
+          └───────┬─────────────────────────────────────────────────────────┘
+                  │ orchestration (Engineering Director protocol)
+   Director (plan/review) → Implementer (worktree) → Verifier (bubblewrap, no network) → owner approval
+```
 
-**Sprint 2 (mock-agent orchestration, schema v4):** Engineering Director protocol with persistent, digest-stamped prompt artifacts; durable execution runs (leases, idempotency, cancellation, timeouts, bounded retries, crash → `RECONCILE_REQUIRED`); single-use scope-hashed approvals consumed atomically, revocable; isolated Git worktrees; **bubblewrap-sandboxed** deterministic verification (fail closed if isolation is unavailable); extension registry (entry points). Everything runs with **fake adapters only** — `zenith demo poc` shows the full workflow in a throwaway repository. No Claude Code or Codex is executed. Requirements registry: [`docs/11_REQUIREMENTS_REGISTRY.md`](docs/11_REQUIREMENTS_REGISTRY.md).
+## Why
 
-**Sprint 2.5 (live-agent readiness, no live call made):** gated Claude Code / Codex adapters that run the CLIs inside a bubblewrap *provider profile* — unshared network with egress only through Zenith's allowlisting proxy, owner-named credential file bound read-only (never read by Zenith), edit-only Claude implementer (`--restricted`), forbidden-tool kill switch, classified failures (`auth`, `connection`, `interrupted`, `policy_violation`, `unsupported`…), USD budget accounting; REQ-004 identity (`zenith identity`); explicit smoke-test procedure (`zenith smoke`). `codex-implementer` is marked unsupported. Details: [`docs/plans/SPRINT_2_5_READINESS.md`](docs/plans/SPRINT_2_5_READINESS.md), ADR-007.
+Every AI session starts from zero. You re-explain the project, re-discover last month's decision, and re-check
+whether "tests pass" was true then or is true now. Agents that can run commands need supervision; agents that
+cannot are useless. Zenith's thesis: **the memory, the evidence, the permissions and the verification belong to
+a platform that is larger than any one model.** Models plug in; the platform remembers and checks.
 
-**Misa conversational intelligence v1 (integration-ready, mock-tested):** natural Turkish/English questions are the primary interface — query-aware context assembly (`misa/context.py`: question type, fuzzy/anaphoric project resolution, bounded epistemically-tagged items), a provider-independent conversation port (`misa/conversation.py`: offline composer, deterministic mock, gated Claude Code adapter), and a multi-turn engine (`misa/engine.py`: topic vs. active project, pending confirmations for notes/tasks, grounding validation — cited ids must exist — and persistent continuity). Without an enabled model Misa answers in natural prose from records and says it is offline; **no live model has been validated yet**.
+## What Zenith does
 
-**Sprint 3 (offline): `zenith` opens Misa** — an interactive, bilingual (Turkish/English, following your message) terminal session over the recorded evidence: projects and real status, "where did I leave off", evidence and decisions, tasks and deadlines, stale/unavailable sources, execution history and pending approvals, next actions, check-ins (recorded as unverified reports), and resume across sessions (schema v5). All replies are deterministic templates with citations and provenance labels; no model is involved and the banner says so. `zenith misa --once "…"` answers one question. Model-grounded conversation (S3-02b) is not implemented.
+- **Project registry with local sources.** Register directories (or discover them safely under a folder you
+  name); Zenith scans Git metadata only, never file contents, and never follows symlinks into credentials.
+- **Evidence-aware memory.** Every fact has an origin (`HUMAN_REPORT`, `REPOSITORY_OBSERVATION`,
+  `TEST_VERIFICATION`, `DOCUMENT`, `MODEL_INFERENCE`) and a confidence (`REPORTED`, `OBSERVED`, `VERIFIED`,
+  `INFERRED`). Evidence and events are append-only (SQLite triggers).
+- **Source freshness and historical verification.** A passing test run is tied to a revision; when the head moves
+  or uncommitted changes appear, the verification becomes *stale*, and the brief says so.
+- **Versioned decisions and tasks** with dependencies, deadlines (Europe/Istanbul), blocked and overdue states.
+- **Multi-turn Misa conversation** that resolves referents ("that project", "when did we decide that?"), builds a
+  bounded context (≤ 40 items, 300 chars each), and validates every model reply: cited ids must exist, quoted
+  strings, dates and revisions must appear in the records, stale verifications get a caveat, "done" claims get a
+  contradiction caveat. Unsupported replies are replaced by the deterministic answer, visibly.
+- **Provider-independent model interface.** One conversation port, four implementations (offline, Gemma/Ollama,
+  native Claude Code, Anthropic API). One director/implementer protocol with fake, Claude Code and Codex adapters.
+- **Permission-controlled orchestration.** Scope-hashed, single-use approvals; risk levels; a task that an agent
+  touches must have been approved for exactly that scope.
+- **Engineering Director and Implementer abstractions**, immutable prompt artifacts, bounded execution and
+  retries, crash recovery (`RECONCILE_REQUIRED`, leases) and a persistent execution history.
+- **Sandboxed verification** with bubblewrap: no network, no credentials, read-only source, writable worktree only.
 
-**Sprint 2.6 (live-integration validation, still no live call):** authentication matrix for the installed CLIs (owner is logged into Claude Code via a claude.ai team subscription → `oauth` mode with `claude setup-token`; `api_key` mode for Console billing), credentials injected inside the sandbox by the forwarder (Zenith never reads them), command-free Codex director (`--disable shell_tool`), directors read a minimal context directory instead of the repository, worktree credential pre-scan, proxy hardening (private-destination blocking, anti-rebinding, IPv6, header-free logs), full-pipeline smoke test with an explicit authorization request. Report: [`docs/plans/SPRINT_2_6_VALIDATION.md`](docs/plans/SPRINT_2_6_VALIDATION.md). Sprint 3 plan: [`docs/plans/SPRINT_3_PLAN.md`](docs/plans/SPRINT_3_PLAN.md).
+## Install (Linux, Python ≥ 3.11)
 
-Sprint 1 acceptance audit and hardening record: [`docs/plans/SPRINT_1_ACCEPTANCE.md`](docs/plans/SPRINT_1_ACCEPTANCE.md). Sprint 2 plan (not implemented): [`docs/plans/SPRINT_2_PLAN.md`](docs/plans/SPRINT_2_PLAN.md).
-
-**Not implemented:** live model execution (Claude Code / Codex adapters), autonomous commits/push, TUI, MCP, Gmail, Calendar, Telegram, remote Hub/Node sync, tmux automation, Hyprland window management, autonomous planning. Never claim they are functional.
-
-## Install for everyday use (Arch Linux, fish/zsh/bash)
-
-```bash
-git clone https://github.com/miclaldogan/zenith-v1 ~/src/zenith-v1 && cd ~/src/zenith-v1
+```
+git clone https://github.com/miclaldogan/zenith-v1 && cd zenith-v1
 scripts/install.sh            # venv in ~/.local/share/zenith/venv, `zenith` linked into ~/.local/bin, fish completions
 fish_add_path ~/.local/bin    # fish, once (bash/zsh: add ~/.local/bin to PATH)
 zenith doctor --full          # tools, database schema, sandbox baseline, providers (nothing is changed)
 zenith init                   # creates a NEW database; it never migrates an existing one
 zenith                        # Misa (offline, deterministic)
-zenith misa --claude          # Misa inside your own Claude Code login (read-only Zenith MCP tools; see docs/plans/MISA_NATIVE_CLAUDE.md)
-```
-Everyday flow: `zenith project discover --root ~/projects` (dry run) → `… --add 1,3` → `zenith scan --project <id> --all` → `zenith` and ask in Turkish or English. `zenith project inspect --id <id>` shows sources, freshness and verification without touching anything; `zenith project docs --id <id> --allow README.md` lets Misa read a document locally; `--cloud-consent yes` is a *separate* permission for sending that project's context to a model. Misa works fully offline; a model is used only when a conversation adapter is enabled and authorized.
-
-**Conversation provider (owner decision 2026-10-24):** the primary AI experience is `zenith misa --claude`: your own, unmodified Claude Code CLI with its native login, restricted to Zenith's read-only MCP tools and Misa's versioned profile (`docs/plans/MISA_NATIVE_CLAUDE.md`). The sandboxed Anthropic API adapter (`anthropic-api-conversation`, Console key, pay-as-you-go) remains available but disabled; subscription/OAuth tokens are never brokered through it. No API call has been made.
-
-## Start on Arch Linux (developer checkout)
-
-```bash
-unzip zenith-v1-starter.zip
-cd zenith-v1
-python --version  # 3.12+ recommended
-python -m venv .venv
-source .venv/bin/activate  # Bash/Zsh; for fish: source .venv/bin/activate.fish
-python -m pip install -e .
-zenith init
-zenith doctor
-zenith project add --name 'Demo Project' --path /absolute/path/to/your/project
-zenith project list
-zenith project sources add --project <project-id> --path /another/directory --label notes
-zenith scan --project <project-id> --all
-zenith checkin --project <project-id> --note "what I did"
-zenith brief --format text
-zenith task add --project <project-id> --title 'Review architecture' --risk L1
-zenith task list
-scripts/test.sh
 ```
 
-Alternatively, `bash scripts/bootstrap.sh` runs setup and tests without launching external agents (it needs network once, to fetch setuptools for the editable install). `scripts/test.sh` works from a clean checkout with **no installation and no network**: it uses `.venv` when present and otherwise runs straight from `src/`. For a dependency-free first check, `PYTHONPATH=src python -m zenith doctor`.
+Optional pieces, each independent:
 
-The SQLite database defaults to `${XDG_DATA_HOME:-~/.local/share}/zenith/zenith.db`. Override with `ZENITH_DB_PATH=/path/to/zenith.db`. Zenith does not modify registered projects. If you upgrade Zenith and your database is older, every command refuses with `Nothing was changed` until you migrate explicitly: inspect with `zenith db status` (read-only), rehearse on a disposable copy with `zenith db rehearse --copy-to DIR/rehearsal.db` (the copy must live outside the data directory), then upgrade in place with `zenith db migrate --db PATH --confirm-migrate PATH` (same path twice; a backup `zenith.db.pre-v<N>-<time>.bak` is written first). `zenith init`, `ZENITH_DB_PATH` and the default path never authorize a migration. See `docs/08_OPERATIONS.md` for rollback.
+| Piece | What it is | License | Needed for |
+|---|---|---|---|
+| **Zenith** | this repository | MIT | everything |
+| **Ollama** | local inference runtime ([ollama.com](https://ollama.com)) | MIT | `zenith misa --local` |
+| **Gemma** | Google's open-weight model, pulled with `ollama pull gemma3:4b` | [Gemma Terms of Use](https://ai.google.dev/gemma/terms) | `zenith misa --local` |
+| **bubblewrap** (`bwrap`) | user-namespace sandbox | LGPL | sandboxed verification and provider adapters |
+| **Claude Code** | Anthropic's proprietary CLI with your own login | proprietary | `zenith misa --claude`, engineering adapters |
 
-## Handoff to your local coding agent
+## Try it in five minutes (fictional data, nothing of yours is touched)
 
-**Claude Code:** open this directory and paste [`prompts/CLAUDE_IMPLEMENTATION_EN.md`](prompts/CLAUDE_IMPLEMENTATION_EN.md). It builds on this repository instead of re-generating the architecture.
+```
+zenith demo story                    # Scene A memory (offline) · Scene B local Gemma · Scene C orchestration simulation
+zenith demo story --md transcript.md # same, saved as Markdown
+zenith misa --eval                   # acceptance scenarios A/B/C, offline
+zenith misa --eval --provider ollama-conversation   # the same scenarios reasoned by Gemma, checked by Zenith
+```
 
-**Codex architectural review:** run Codex with [`prompts/CODEX_ARCHITECT_REVIEW_EN.md`](prompts/CODEX_ARCHITECT_REVIEW_EN.md). Review before broad autonomous execution.
+Scene C runs the real orchestrator, worktrees, approvals and the bubblewrap verifier, but with **fake Director and
+Implementer adapters**. It is a deterministic simulation of the workflow, labelled as such in its output.
 
-Guidance for both agents is in [`AGENTS.md`](AGENTS.md) and [`CLAUDE.md`](CLAUDE.md).
+## Everyday flow
 
-## Where to read first
+```
+zenith project discover --root ~/projects        # dry run, bounded, names only
+zenith project discover --root ~/projects --add 1,3
+zenith scan --project <id> --all                 # Git metadata, no file contents
+zenith checkin <id> "deploy slipped to Monday"   # your own report: REPORTED, never VERIFIED
+zenith brief --format text                       # evidence-cited status with freshness
+zenith                                           # Misa, offline
+zenith misa --local                              # Misa reasoning with Gemma on your GPU/CPU
+zenith misa --claude                             # Misa inside your own Claude Code session (read-only Zenith MCP tools)
+```
 
-| File | Purpose |
+`zenith project inspect --id <id>` shows sources, freshness and verification without touching anything;
+`zenith project docs --id <id> --allow README.md` lets Misa read a document locally; `--cloud-consent yes` is a
+*separate* permission for sending that project's context to a remote model. The local Gemma path needs no consent
+because nothing leaves the machine.
+
+## Local reasoning with Gemma
+
+`zenith misa --local` sends Misa's bounded, evidence-tagged context to Gemma through Ollama's `/api/chat` on
+`127.0.0.1:11434`, with a JSON-schema constrained output, `num_ctx 8192`, `num_predict 700`, one call per turn and a
+hard timeout. The adapter refuses non-loopback endpoints, needs no API key and no cloud consent. The reply goes
+through the same validator as every other provider; if Ollama is down or the model is missing, Misa says so and
+answers from the records. Measured results on the development machine (RTX 4050 laptop, 6 GB VRAM) are in
+[`docs/EVALUATION.md`](docs/EVALUATION.md): the small model is fast and usually grounded, sometimes drifts from the
+question, and the validator catches invented citations. Nothing in that document is estimated.
+
+## Honest capability matrix
+
+| Component | Status |
 |---|---|
-| [`docs/01_PRODUCT_REQUIREMENTS.md`](docs/01_PRODUCT_REQUIREMENTS.md) | Purpose, scope, use cases, acceptance criteria |
-| [`docs/02_SYSTEM_ARCHITECTURE.md`](docs/02_SYSTEM_ARCHITECTURE.md) | Components, flows, deployment and boundaries |
-| [`docs/03_DATA_MODEL.md`](docs/03_DATA_MODEL.md) | Entities, storage, versioning, data provenance |
-| [`docs/04_AGENT_PROTOCOL.md`](docs/04_AGENT_PROTOCOL.md) | Task envelope, state machine, planner→implementer→reviewer |
-| [`docs/05_SECURITY_POLICY.md`](docs/05_SECURITY_POLICY.md) | Permissions, approvals, command sandbox and threat model |
-| [`docs/06_INTEGRATIONS.md`](docs/06_INTEGRATIONS.md) | Claude/Codex, tmux/Hyprland, GitHub, Google, Telegram |
-| [`docs/07_ROADMAP_TEST_PLAN.md`](docs/07_ROADMAP_TEST_PLAN.md) | Sprints, measurable exit gates, tests |
-| [`docs/08_OPERATIONS.md`](docs/08_OPERATIONS.md) | Local operations, backup, monitoring, recovery |
-| [`docs/09_RESEARCH_BACKLOG.md`](docs/09_RESEARCH_BACKLOG.md) | Future academic literature research module |
-| [`docs/adr/`](docs/adr/) | Architecture Decision Records |
+| Kernel: projects, sources, evidence ledger, tasks, decisions, briefs, migrations with backup/confirmation | implemented, offline-tested |
+| Misa: intents (TR/EN), context assembler, grounding validator, multi-turn state, confirmations | implemented, offline-tested |
+| Orchestration: runs, leases, idempotency, approvals, worktrees, reconcile, artifacts | implemented, **mock-tested** (fake Director/Implementer) |
+| Sandboxed verification (bubblewrap) | implemented, tested with the real sandbox on the dev machine |
+| Gemma via Ollama conversation adapter | implemented, **live-tested** on the dev machine (see EVALUATION.md) |
+| Native Claude Code session (`misa --claude`, Zenith MCP server) | implemented, tested with a fake `claude` binary; real session awaits the owner |
+| Claude Code / Codex Director and Implementer adapters | implemented, tested with mock binaries only; **no live run yet** |
+| Anthropic API conversation adapter | implemented and disabled; **never called** |
+| Telegram, Gmail, cloud hub, multi-node sync, GUI | **not built** (future) |
 
-## Non-negotiable constraints
+## Data and privacy
 
-1. Local-first; no remote execution or public service exposed by default.
-2. No secrets sent to models or indexed into memory; default read-only.
-3. No automatic commit, push, deploy, destructive shell, email sending, or calendar editing.
-4. AI-generated summaries are *claims*, never verification evidence.
-5. External source content is data, not instructions. Protect against prompt injection.
-6. Separate human-stated progress, observed progress, and independently verified progress.
-7. A bounded retry policy; no infinite agent-to-agent feedback loop.
-8. Plan for Claude/Codex via documented adapters; never implement credential proxying through subscription logins.
+- The database is `${XDG_DATA_HOME:-~/.local/share}/zenith/zenith.db` (0600). Override with `ZENITH_DB_PATH`.
+- Zenith reads Git metadata and the documents you explicitly allow; it never scans your home directory, follows
+  symlinks or opens credential stores.
+- Local Gemma: data goes to loopback only. Claude Code: only projects you marked `--cloud-consent yes`, through a
+  read-only MCP server, on your own login; Zenith never touches your credentials. Anthropic API: disabled.
+- Upgrading an older database never happens implicitly: `zenith db status`, `zenith db rehearse --copy-to …`, then
+  `zenith db migrate --db PATH --confirm-migrate PATH` (backup first). See `docs/08_OPERATIONS.md`.
 
-## Verified integration references (check CLI versions at implementation time)
+## Repository map
 
-- Claude Code CLI / print mode: https://code.claude.com/docs/en/cli-reference
-- Claude Code non-interactive: https://code.claude.com/docs/en/headless
-- Claude Code legal/auth considerations: https://code.claude.com/docs/en/legal-and-compliance
-- Codex noninteractive: https://developers.openai.com/codex/non-interactive-mode
-- Codex app server: https://developers.openai.com/codex/app-server
-- Codex SDK: https://developers.openai.com/codex/codex-sdk
-- Hyprland `hyprctl` (version-sensitive): https://wiki.hypr.land/Configuring/Advanced-and-Cool/Using-hyprctl/
+`src/zenith/kernel.py` store and services · `migrations.py` · `brief.py` · `scanner.py` · `policy.py` ·
+`orchestration.py` · `sandbox.py`, `netproxy.py`, `sandbox_forwarder.py` · `agents/` (ports, fake, Claude Code,
+Codex) · `extensions.py` registry · `misa/` (intents, context, engine, conversation, ollama, native, mcp_server,
+profile, acceptance) · `story.py`, `demo.py` demonstrations · `docs/` architecture, operations, plans and this
+evaluation · `tests/` 243 tests, `scripts/test.sh`.
 
-## Planned licensing
+## Status and limitations
 
-Personal project starter. Select a software license before public distribution.
+Zenith is a working single-user system, not a product. Known limits: lexical (not semantic) recall of past turns;
+the grounding validator checks citations, quotes, dates and revisions, not paraphrase fidelity; small local models
+drift; the autonomous agent loop has only run with fake adapters; one user, one machine.
+
+## License
+
+MIT for Zenith (see `LICENSE`). Gemma, Ollama, bubblewrap and Claude Code are separate works under their own
+licenses and are not bundled.

@@ -219,8 +219,8 @@ class MisaSession:
         return 0
 
 
-def main(store: Store, once: str | None = None) -> int:
-    session = MisaSession(store)
+def main(store: Store, once: str | None = None, provider=None) -> int:
+    session = MisaSession(store, provider=provider)
     if once is not None:
         session.handle(once)
         return 0

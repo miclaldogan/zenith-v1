@@ -5,7 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "zenith-personal-os"
 version = "0.1.0"
-description = "Zenith local-first orchestration kernel — safe Sprint-0 starter"
+description = "Zenith: local-first personal intelligence and agent-orchestration platform (Misa assistant, verified project memory, bounded orchestration)"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["local-first", "agents", "orchestration", "gemma", "ollama", "sqlite"]
+classifiers = ["Programming Language :: Python :: 3", "Operating System :: POSIX :: Linux", "Environment :: Console"]
 requires-python = ">=3.11"
 dependencies = []
 

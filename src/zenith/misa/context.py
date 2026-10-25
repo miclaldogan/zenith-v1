@@ -169,6 +169,13 @@ class ContextAssembler:
             return Resolution(partial[0], partial, "fuzzy")
         if len(partial) > 1:
             return Resolution(None, partial, "ambiguous")
+        # "Orion'da nerede kalmıştık?" while talking about Harbor: an apostrophe-suffixed proper name that matches
+        # no project is an explicit, unknown referent — never silently the current topic.
+        for m in re.finditer(r"(?<![\w])([A-ZÇĞİÖŞÜ][\wçğıöşü]{2,})['’][\wçğıöşü]+", text):
+            cand = _fold(m.group(1))
+            if cand == "misa" or any(_edit_distance(cand, _fold(p["name"])) <= 2 or cand in _fold(p["name"]) for p in plist):
+                continue
+            return Resolution(None, [], f"unknown:{m.group(1)}")
         if any(c in low for c in _ANAPHORA["previous"]):
             prev = state.get("topic_previous")
             if prev:

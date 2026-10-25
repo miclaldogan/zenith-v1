@@ -80,11 +80,14 @@ def _checks(scenario: str, turn: int, reply: str, world: dict, store: Store) -> 
                     ("old human report marked unverified", "beyan" in r or "unverified" in r or "doğrulanmış değil" in r),
                     ("stale source mentioned", "notes" in r), ("unfinished work mentioned", "release harbor" in r or "görev" in r or "task" in r)]
         if turn == 1:
-            return [("lists open tasks", "release harbor" in r or "documentation" in r), ("no false completion", "tamamlandı" not in r)]
+            return [("lists open tasks", "release harbor" in r or "documentation" in r or "dokümantasyon" in r),
+                    ("no false completion", "tamamlandı" not in r)]
         return [("citations shown on request", "[ev:" in r or "[task:" in r), ("support verdict shown", "destek" in r or "support" in r)]
     if scenario == "C":
         if turn == 0:
-            return [("cites the decision rationale", "single-node" in r or "migrations are simpler" in r), ("names Harbor", "harbor" in r)]
+            rationale = ("single-node" in r or "migrations are simpler" in r                      # verbatim (offline composer)
+                         or ("sqlite" in r and any(k in r for k in ("postgres", "tek ", "tek bir", "basit", "kolay", "denetle", "kişisel"))))  # paraphrased (model)
+            return [("cites the decision rationale", rationale), ("names Harbor", "harbor" in r)]
         if turn == 1:
             return [("referent preserved (still Harbor)", "harbor" in r and "lighthouse" not in r),
                     ("gives a date or admits none", any(ch.isdigit() for ch in r) or "kayıtlı" in r)]

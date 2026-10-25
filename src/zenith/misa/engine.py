@@ -65,7 +65,9 @@ def assess_grounding(reply: dict, request: dict) -> dict:
     ui_phrases = ("kaynakları göster", "show sources", "ayrıntılı", "more detail", "evet/hayır", "yes/no")
     unsupported = [f"quote:{q[:40]}" for q in _QUOTE.findall(text) if q.lower() not in haystack and q.lower() not in ui_phrases]
     unsupported += [f"date:{d}" for d in _DATE.findall(text) if d not in haystack]
-    unsupported += [f"hash:{h}" for h in _HASH.findall(text) if not h.isdigit() and h not in haystack]
+    known_ids = " ".join(str(i.get("id", "")) for i in request.get("items", [])).lower()
+    unsupported += [f"hash:{h}" for h in _HASH.findall(text)
+                    if not h.isdigit() and h not in haystack and h.lower() not in known_ids]   # ids echoed from the request are not inventions
     ver = next((i for i in items if i["kind"] == "verification"), None)
     temporal = bool(ver and ver.get("applies") is False and _PRESENT_VERIFIED.search(text) and not _PAST_MARKERS.search(text))
     done_reports = [i for i in items if i["kind"] == "evidence" and i.get("epistemic") == "reported" and _DONE_REPORT.search(i.get("text", ""))]
@@ -128,6 +130,12 @@ class ConversationEngine:
                 return TurnResult(f"Var: {res.project['name']}. Ona geçtik; sor." if lang == "tr" else f"Yes: {res.project['name']}. We're on it; ask away.", "deterministic")
             return TurnResult((f"'{asked}' adında kayıtlı bir proje yok. Elimdekiler: {names}." if lang == "tr"
                                else f"No registered project called '{asked}'. I have: {names}."), "deterministic")
+        probe = self.assembler.resolve_project(text, state)
+        if probe.how.startswith("unknown:"):        # "Orion'da nerede kalmıştık?" mid-conversation: never silently the topic
+            unknown = probe.how.split(":", 1)[1]
+            names = ", ".join(p["name"] for p in self.store.list_projects()[:8])
+            return TurnResult((f"'{unknown}' adında kayıtlı bir proje yok. Elimdekiler: {names}." if lang == "tr"
+                               else f"No registered project called '{unknown}'. I have: {names}."), "deterministic")
 
         cmd = parse_command(text, lang)
         if cmd.intent == "checkin":          # `not: …` / `not @Proje: …` typed in conversation → staged, confirmed

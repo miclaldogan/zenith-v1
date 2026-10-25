@@ -26,7 +26,8 @@ def make_parser() -> argparse.ArgumentParser:
     ms.add_argument("--resume", action="store_true", help="with --claude: continue the last native Misa session")
     ms.add_argument("--allow-notes", action="store_true", help="with --claude: expose record_note (Claude Code asks you before each write)")
     ms.add_argument("--plan", action="store_true", help="with --claude: print the exact launch plan and preflight; start nothing")
-    ms.add_argument("--model", default=None, help="with --claude: model alias/name for the session (default: Claude Code's default)")
+    ms.add_argument("--model", default=None, help="with --claude/--local: model for the session (e.g. gemma3:4b)")
+    ms.add_argument("--local", action="store_true", help="reason with a local open-weight model via Ollama on this machine (default gemma3:4b); offline fallback if unavailable")
     cmds.add_parser("init", help="Create the local SQLite database (never migrates an existing one)")
     dbp = cmds.add_parser("db", help="Database inspection, migration rehearsal and authorized migration")
     dbs = dbp.add_subparsers(dest="db_sub", required=True)
@@ -211,6 +212,12 @@ def make_parser() -> argparse.ArgumentParser:
     poc.add_argument("--dir", help="where to create the throwaway repo and state (default: temp dir)")
     poc.add_argument("--scenario", default="success",
                      choices=["success", "out_of_scope", "false_claim", "disagree", "crash"])
+    st = dm.add_parser("story", help="Three-scene demonstration on fictional data: memory (offline), local Gemma reasoning, orchestration simulation")
+    st.add_argument("--dir", help="throwaway directory (default: temp dir)")
+    st.add_argument("--no-local", action="store_true", help="skip the local model scene")
+    st.add_argument("--model", default=None, help="Ollama model for scene B (default gemma3:4b)")
+    st.add_argument("--md", metavar="FILE", help="also write a Markdown transcript to FILE")
+    st.add_argument("--json", action="store_true", help="print the JSON report instead of the transcript")
     ev = cmds.add_parser("events")
     ev.add_argument("--limit", type=int, default=20)
     return p
@@ -286,8 +293,19 @@ def main() -> None:
                 from .misa.acceptance import live_check
                 output(live_check(store, args.live_check, args.provider or "anthropic-api-conversation", args.authorize_live_call))
                 sys.exit(0)
+            provider = None
+            if getattr(args, "local", False):
+                from .misa.ollama import OllamaConversation
+                provider = OllamaConversation({"model": args.model} if args.model else {})
+                pre = provider.preflight()
+                if not pre["available"]:
+                    print(f"misa: local model unavailable — {pre['detail']}. Continuing offline (deterministic answers).", file=sys.stderr)
+                    provider = None
+                else:
+                    print(f"misa: local reasoning with {pre['model']} via Ollama {pre.get('ollama_version') or ''} at {pre['endpoint']} "
+                          f"(nothing leaves this machine)", file=sys.stderr)
             from .misa.repl import main as misa_main
-            sys.exit(misa_main(store, getattr(args, "once", None)))
+            sys.exit(misa_main(store, getattr(args, "once", None), provider=provider))
         if args.cmd == "init":
             existed = store.db_path.exists()
             path = store.init()
@@ -484,8 +502,16 @@ def main() -> None:
             from .sandbox import detect
             output(detect().as_dict())
         elif args.cmd == "demo":
-            from .demo import run_poc
-            output(run_poc(args.dir, args.scenario))
+            if args.demo_sub == "story":
+                from .story import render, run_story
+                rep = run_story(args.dir, local=not args.no_local, model=args.model)
+                text = render(rep)
+                if args.md:
+                    Path(args.md).write_text(text + "\n", encoding="utf-8")
+                print(json.dumps(rep, ensure_ascii=False, indent=2) if args.json else text)
+            else:
+                from .demo import run_poc
+                output(run_poc(args.dir, args.scenario))
         elif args.cmd == "events":
             output(store.events(args.limit))
     except (ZenithError, OSError, ValueError) as exc:
