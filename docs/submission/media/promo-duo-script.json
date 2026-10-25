@@ -1,0 +1,16 @@
+[
+ {"id":"l01","scene":"title","speaker":"misa","text":"Hi! I'm Misa. And this charming voice next to me is..."},
+ {"id":"l02","scene":"title","speaker":"zenith","text":"Zenith. The platform. I remember things. Somebody has to."},
+ {"id":"l03","scene":"chaos","speaker":"misa","text":"Our owner got tired of re-explaining his projects to every new chat."},
+ {"id":"l04","scene":"chaos","speaker":"zenith","text":"\"Did the tests pass?\" \"When did we decide that?\" Every. Single. Session."},
+ {"id":"l05","scene":"memory","speaker":"misa","text":"So now I just ask Zenith where we left off."},
+ {"id":"l06","scene":"memory","speaker":"zenith","text":"Open tasks, the last decision, the last verified test run. And whether it still counts. Spoiler: it doesn't. You changed the code."},
+ {"id":"l07","scene":"memory","speaker":"misa","text":"Verified, observed, or just reported. He keeps them apart."},
+ {"id":"l08","scene":"memory","speaker":"zenith","text":"A note saying \"basically done\" is a claim. Not evidence."},
+ {"id":"l09","scene":"gemma","speaker":"misa","text":"When I want to think out loud, Gemma runs right here on the GPU. Nothing leaves the machine."},
+ {"id":"l10","scene":"gemma","speaker":"zenith","text":"And I check every answer against the records. Invent a citation, and I replace it."},
+ {"id":"l11","scene":"orchestration","speaker":"misa","text":"Coding agents get a director, their own worktree, and a sandboxed verifier."},
+ {"id":"l12","scene":"orchestration","speaker":"zenith","text":"Claim \"all tests pass\" when they didn't? Blocked."},
+ {"id":"l13","scene":"outro","speaker":"misa","text":"Open source, MIT, zero dependencies. Zenith remembers, coordinates, verifies."},
+ {"id":"l14","scene":"outro","speaker":"zenith","text":"Let's go."}
+]

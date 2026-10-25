@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Zenith promo (duo)</title>
+<style>
+:root{--bg:#0b0f14;--panel:#111821;--line:#1f2a36;--fg:#e6edf3;--dim:#8b98a8;--blue:#79c0ff;--green:#7ee787;--orange:#ffb454;--red:#ff7b72;--purple:#d2a8ff;--cyan:#56d4dd;--misa:#c9a6ff;--zen:#ffb454}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1920px;height:1080px;overflow:hidden;background:var(--bg);color:var(--fg);font-family:"Inter","Noto Sans","DejaVu Sans",system-ui,sans-serif}
+.mono{font-family:"CaskaydiaCove Nerd Font Mono","JetBrains Mono",monospace}
+#stage{position:relative;width:1920px;height:1080px;overflow:hidden;background:radial-gradient(ellipse at 50% 30%,#121a24 0%,#0b0f14 60%)}
+.grid{position:absolute;inset:0;background-image:linear-gradient(rgba(121,192,255,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(121,192,255,.07) 1px,transparent 1px);background-size:64px 64px;mask-image:radial-gradient(ellipse at 50% 40%,#000 25%,transparent 78%)}
+.glow{position:absolute;width:1400px;height:800px;left:260px;top:60px;background:radial-gradient(ellipse,rgba(121,192,255,.16),transparent 60%);filter:blur(50px)}
+.glow2{position:absolute;width:900px;height:600px;left:1100px;top:500px;background:radial-gradient(ellipse,rgba(210,168,255,.12),transparent 60%);filter:blur(60px)}
+#stars{position:absolute;inset:0}
+.star{position:absolute;width:4px;height:4px;border-radius:50%;background:#fff;opacity:.5}
+.scene{position:absolute;inset:0;opacity:0;will-change:opacity,transform}
+.title{position:absolute;left:0;right:0;top:250px;text-align:center;font-weight:900;font-size:240px;letter-spacing:.08em;color:#fff;text-shadow:0 0 70px rgba(121,192,255,.6)}
+.title span{display:inline-block}
+.tag{position:absolute;left:0;right:0;top:530px;text-align:center;font-size:44px;color:var(--dim);font-weight:500}
+.chat{position:absolute;width:520px;background:var(--panel);border:1px solid var(--line);border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.55);overflow:hidden}
+.chat .bar{height:44px;background:#0e141b;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:0 16px;font-size:20px;color:var(--dim)}
+.chat .bar i{width:14px;height:14px;border-radius:50%;background:#ff5f57;display:inline-block}.chat .bar i+i{background:#febc2e}.chat .bar i+i+i{background:#28c840}
+.chat p{padding:14px 20px;font-size:24px;line-height:1.35;color:var(--fg);border-bottom:1px solid var(--line)}
+.chat p b{color:var(--orange);font-weight:600}
+.term{position:absolute;left:120px;top:120px;width:1120px;height:640px;background:#0d1219;border:1px solid var(--line);border-radius:20px;box-shadow:0 40px 120px rgba(0,0,0,.6);padding:36px 44px;font-size:30px;line-height:1.5;white-space:pre-wrap;overflow:hidden}
+.term .p{color:var(--green);font-weight:700}
+.term .c{color:#fff;font-weight:600}
+.term .cur{display:inline-block;width:16px;height:34px;background:#f29e74;vertical-align:-6px;margin-left:4px}
+.chip{position:absolute;left:1300px;width:500px;padding:22px 26px;border-radius:16px;background:var(--panel);border:1px solid var(--line);font-size:26px;line-height:1.3;box-shadow:0 20px 50px rgba(0,0,0,.45)}
+.chip b{display:block;font-size:22px;letter-spacing:.14em;margin-bottom:6px}
+.chip.v b{color:var(--green)}.chip.r b{color:var(--orange)}.chip.u b{color:var(--dim)}.chip.i b{color:var(--blue)}
+.card{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:22px;box-shadow:0 30px 90px rgba(0,0,0,.55);padding:36px 42px}
+.card h3{font-size:34px;font-weight:700;margin-bottom:14px}
+.badge{display:inline-block;padding:8px 16px;border-radius:999px;font-size:24px;margin:6px 8px 0 0;border:1px solid var(--line);background:#0d1219}
+.badge.g{color:var(--green);border-color:rgba(126,231,135,.4)}.badge.b{color:var(--blue);border-color:rgba(121,192,255,.4)}.badge.o{color:var(--orange);border-color:rgba(255,180,84,.4)}.badge.r{color:var(--red);border-color:rgba(255,123,114,.4)}
+.gpu{position:absolute;left:140px;top:200px;width:560px;height:360px;border-radius:26px;background:linear-gradient(145deg,#15202c,#0d1219);border:1px solid var(--line);box-shadow:0 0 0 1px rgba(121,192,255,.15),0 40px 100px rgba(0,0,0,.6)}
+.gpu .chipset{position:absolute;left:170px;top:90px;width:220px;height:180px;border-radius:14px;background:repeating-linear-gradient(90deg,#1b2733 0 10px,#223241 10px 20px);border:2px solid rgba(121,192,255,.5);box-shadow:0 0 40px rgba(121,192,255,.35)}
+.gpu .chipset:after{content:"GEMMA 3 · 4B";position:absolute;inset:0;display:grid;place-items:center;font-weight:800;font-size:24px;color:#fff;letter-spacing:.04em;white-space:nowrap}
+.gpu .fan{position:absolute;right:30px;bottom:26px;width:120px;height:120px;border-radius:50%;border:10px dotted rgba(121,192,255,.35)}
+.lock{position:absolute;left:140px;top:590px;width:560px;font-size:26px;line-height:1.35;color:var(--green);font-weight:600}
+.node{position:absolute;top:330px;width:330px;height:190px;border-radius:22px;background:var(--panel);border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.5);padding:26px;text-align:center}
+.node h4{font-size:30px;font-weight:800;margin-bottom:8px}.node small{font-size:22px;color:var(--dim)}
+.arrow{position:absolute;top:415px;width:90px;height:4px;background:#2b3a4a}
+.arrow:after{content:"";position:absolute;right:-2px;top:-8px;border:10px solid transparent;border-left-color:#2b3a4a}
+.packet{position:absolute;top:408px;width:18px;height:18px;border-radius:50%;background:var(--blue);box-shadow:0 0 30px var(--blue)}
+.say{position:absolute;padding:14px 22px;border-radius:14px;background:#162130;border:1px solid var(--line);font-size:26px;white-space:nowrap}
+.stamp{position:absolute;left:0;right:0;top:620px;text-align:center;font-size:72px;font-weight:900;letter-spacing:.12em;color:var(--red);text-shadow:0 0 40px rgba(255,123,114,.6)}
+.foot{position:absolute;left:0;right:0;top:560px;text-align:center;font-size:40px;color:var(--fg)}
+.foot .url{font-size:54px;font-weight:800;color:var(--blue);margin-bottom:22px}
+/* speakers + captions */
+#cast{position:absolute;left:0;right:0;bottom:0;height:230px;background:linear-gradient(transparent,rgba(5,8,12,.92) 35%)}
+.who{position:absolute;bottom:52px;display:flex;align-items:center;gap:18px;opacity:.35;transition:none}
+.who.misa{left:120px}.who.zen{right:120px;flex-direction:row-reverse}
+.who .name{font-size:26px;font-weight:800;letter-spacing:.12em}
+.who.misa .name{color:var(--misa)}.who.zen .name{color:var(--zen)}
+.orb{width:96px;height:96px;border-radius:50%;background:conic-gradient(from 200deg,var(--blue),var(--purple),var(--cyan),var(--blue));box-shadow:0 0 40px rgba(201,166,255,.6);position:relative}
+.orb:before{content:"";position:absolute;inset:8px;border-radius:50%;background:#0b0f14}
+.orb:after{content:"◠ ◠";position:absolute;inset:0;display:grid;place-items:center;color:#fff;font-size:34px;letter-spacing:4px;padding-bottom:10px}
+.core{width:96px;height:96px;position:relative;background:linear-gradient(135deg,#ffb454,#ff7b72);clip-path:polygon(50% 0,95% 25%,95% 75%,50% 100%,5% 75%,5% 25%);box-shadow:0 0 40px rgba(255,180,84,.6)}
+.core:before{content:"";position:absolute;inset:7px;background:#0b0f14;clip-path:polygon(50% 0,95% 25%,95% 75%,50% 100%,5% 75%,5% 25%)}
+.core:after{content:"Z";position:absolute;inset:0;display:grid;place-items:center;color:#ffb454;font-weight:900;font-size:44px}
+#cap{position:absolute;left:380px;right:380px;bottom:70px;text-align:center;font-size:40px;line-height:1.3;font-weight:600;color:#fff;text-shadow:0 2px 20px rgba(0,0,0,.8)}
+#cap .sp{display:block;font-size:22px;letter-spacing:.18em;margin-bottom:8px;font-weight:800}
+.ring{position:absolute;width:140px;height:140px;border-radius:50%;border:3px solid currentColor;opacity:0}
+</style></head>
+<body><div id="stage">
+<div class="grid"></div><div class="glow"></div><div class="glow2"></div><div id="stars"></div>
+
+<section class="scene" id="s_title">
+  <div class="title" id="titleWord"></div>
+  <div class="tag" id="tagline">I was too lazy to manage my AI agents, so I built an AI to manage them.</div>
+</section>
+
+<section class="scene" id="s_chaos"></section>
+
+<section class="scene" id="s_memory">
+  <div class="term mono" id="term"></div>
+  <div class="chip v" id="chip1" style="top:130px"><b>VERIFIED</b>Tests passed at 68beab2; uncommitted changes since → does not apply today</div>
+  <div class="chip r" id="chip2" style="top:300px"><b>REPORTED</b>"Harbor is basically done" — the owner's own note, not verified</div>
+  <div class="chip u" id="chip3" style="top:470px"><b>UNCONFIRMED</b>source 'notes' is unavailable</div>
+  <div class="chip i" id="chip4" style="top:640px"><b>INTENDED</b>Release Harbor 1.0 — overdue</div>
+</section>
+
+<section class="scene" id="s_gemma">
+  <div class="gpu" id="gpu"><div class="chipset"></div><div class="fan"></div></div>
+  <div class="lock" id="lock">🔒 127.0.0.1:11434 — loopback only,<br>nothing leaves the machine</div>
+  <div class="card" id="g1" style="left:780px;top:120px;width:1000px"><h3>Gemma, locally, on top of the records</h3>
+    <span class="badge b">gemma3:4b · Q4_K_M</span><span class="badge b">2.56 GiB · 100 % GPU</span><span class="badge b">JSON-schema output</span><span class="badge b">num_ctx 8192</span></div>
+  <div class="card" id="g2" style="left:780px;top:370px;width:1000px"><h3 style="color:var(--green)">✔ grounding: supported</h3>
+    <p class="mono" style="font-size:24px;line-height:1.45;color:var(--fg)">According to the records, you decided to keep SQLite due to its simplicity for single-node personal use and easier auditability of migrations. The decision was made on 2026-10-25. However, the ‘notes’ source is currently unavailable…</p>
+    <span class="badge g">≈ 8 s per turn</span><span class="badge g">~52 tok/s</span><span class="badge g">laptop RTX 4050 · 100 % GPU</span></div>
+  <div class="card" id="g3" style="left:780px;top:700px;width:1000px"><h3 style="color:var(--red)">✘ invented citation → caught</h3>
+    <span class="badge r">"The model's answer did not match the records"</span><span class="badge o">answered from the records instead</span></div>
+</section>
+
+<section class="scene" id="s_orch">
+  <div class="node" id="n1" style="left:150px"><h4 style="color:var(--blue)">Director</h4><small>plans · reviews</small></div>
+  <div class="arrow" style="left:490px"></div>
+  <div class="node" id="n2" style="left:590px"><h4 style="color:var(--purple)">Implementer</h4><small>isolated worktree</small></div>
+  <div class="arrow" style="left:930px"></div>
+  <div class="node" id="n3" style="left:1030px"><h4 style="color:var(--green)">Verifier</h4><small>bubblewrap · no network</small></div>
+  <div class="arrow" style="left:1370px"></div>
+  <div class="node" id="n4" style="left:1470px"><h4 style="color:var(--orange)">Owner approval</h4><small>single-use, scope-hashed</small></div>
+  <div class="packet" id="pk"></div>
+  <div class="say" id="say1" style="left:600px;top:220px">“Fixed it, all tests pass.”</div>
+  <div class="say mono" id="say2" style="left:1000px;top:220px;color:var(--red)">unit: exit 1, expected 0</div>
+  <div class="stamp" id="stamp">BLOCKED · correction_required</div>
+</section>
+
+<section class="scene" id="s_outro">
+  <div class="title" id="titleWord2" style="top:180px;font-size:170px">ZENITH</div>
+  <div class="foot" id="foot"><div class="url">github.com/miclaldogan/zenith-v1</div><div>remembers · coordinates · verifies</div>
+    <div style="margin-top:24px;color:var(--dim);font-size:30px">open source · MIT · zero dependencies · Hacktoberfest 2026</div></div>
+</section>
+
+<div id="cast">
+  <div class="who misa" id="whoMisa"><div class="orb"></div><div class="name">MISA</div></div>
+  <div class="who zen" id="whoZen"><div class="core"></div><div class="name">ZENITH</div></div>
+  <div id="cap"></div>
+</div>
+</div>
+<script>
+const LINES = [{"scene": "title", "speaker": "misa", "text": "Hi! I'm Misa. And this charming voice next to me is...", "duration": 5.6}, {"scene": "title", "speaker": "zenith", "text": "Zenith. The platform. I remember things. Somebody has to.", "duration": 4.479}, {"scene": "chaos", "speaker": "misa", "text": "Our owner got tired of re-explaining his projects to every new chat.", "duration": 4.646}, {"scene": "chaos", "speaker": "zenith", "text": "\"Did the tests pass?\" \"When did we decide that?\" Every. Single. Session.", "duration": 5.725}, {"scene": "memory", "speaker": "misa", "text": "So now I just ask Zenith where we left off.", "duration": 3.318}, {"scene": "memory", "speaker": "zenith", "text": "Open tasks, the last decision, the last verified test. And whether it still counts. Spoiler: you changed the code.", "duration": 10.077}, {"scene": "memory", "speaker": "misa", "text": "Verified, observed, or just reported. He keeps them apart.", "duration": 4.439}, {"scene": "memory", "speaker": "zenith", "text": "A note saying \"basically done\" is a claim. Not evidence.", "duration": 4.191}, {"scene": "gemma", "speaker": "misa", "text": "When I want to think out loud, Gemma runs right here on the GPU. Nothing leaves the machine.", "duration": 6.553}, {"scene": "gemma", "speaker": "zenith", "text": "And I check every answer against the records. Invent a citation, and I replace it.", "duration": 4.937}, {"scene": "orchestration", "speaker": "misa", "text": "Coding agents get a director, their own worktree, and a sandboxed verifier.", "duration": 5.477}, {"scene": "orchestration", "speaker": "zenith", "text": "Claim \"all tests pass\" when they didn't? Blocked.", "duration": 4.646}, {"scene": "outro", "speaker": "misa", "text": "Open source, MIT, zero dependencies.", "duration": 3.61}, {"scene": "outro", "speaker": "zenith", "text": "Zenith remembers, coordinates, verifies.", "duration": 2.904}, {"scene": "outro", "speaker": "misa", "text": "Let's go!", "duration": 0.874}];
+const CHAOS = [["Claude","Let me explain the project <b>again</b>…"],["Codex","Did the tests pass?"],["ChatGPT","<b>When</b> did we decide that?"],["Terminal","Which branch were we on?"],["Notion","deploy slipped to Monday (?)"],["Claude","Where did we leave off? 🤔"]];
+const ANSWER = `The latest note from you on Harbor is from 2026-09-20 […]. That's your report — not verified yet. Tests last passed on 2026-10-25 at 68beab2, but there are uncommitted changes; I can't say whether they pass today. Note: source 'notes' is unavailable — I can't confirm its current state. 2 tasks are open; the most pressing is “Release Harbor 1.0”.`;
+const $ = id => document.getElementById(id);
+const clamp = (x,a=0,b=1)=>Math.max(a,Math.min(b,x));
+const ease = x => 1-Math.pow(1-clamp(x),3);
+const back = x => { x=clamp(x); const c=1.70158; return 1+ (c+1)*Math.pow(x-1,3)+c*Math.pow(x-1,2); };
+const fade = (el,x)=>{ el.style.opacity = clamp(x); };
+const pop = (el, x, dy=40) => { const e = back(x); el.style.opacity = clamp(x*3); el.style.transform = `translateY(${(1-e)*dy}px) scale(${0.85+0.15*e})`; };
+// timeline: lines → scenes
+let t0 = 0; const lines = LINES.map(l => { const o = {...l, start: t0, end: t0 + l.duration}; t0 += l.duration; return o; });
+const sceneOrder = ["title","chaos","memory","gemma","orchestration","outro"];
+const scenes = sceneOrder.map(name => { const ls = lines.filter(l => l.scene === name); return { name, start: ls[0].start, end: ls[ls.length-1].end }; });
+const sceneEl = { title: "s_title", chaos: "s_chaos", memory: "s_memory", gemma: "s_gemma", orchestration: "s_orch", outro: "s_outro" };
+// stars
+const starsEl = $("stars"); const STARS = []; let seed = 7; const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+for (let i = 0; i < 70; i++) { const d = document.createElement("div"); d.className = "star"; const s = {x: rnd()*1920, y: rnd()*1080, r: 2+rnd()*3, sp: .3+rnd()*1.2, ph: rnd()*6.28}; d.style.width = d.style.height = s.r+"px"; starsEl.appendChild(d); STARS.push([d, s]); }
+// chaos windows
+const chaos = $("s_chaos");
+CHAOS.forEach((c,i)=>{ const d=document.createElement("div"); d.className="chat"; d.id="ch"+i; d.innerHTML=`<div class="bar"><i></i><i></i><i></i>${c[0]}</div><p>${c[1]}</p><p>${CHAOS[(i+2)%6][1]}</p>`; chaos.appendChild(d); });
+const title = $("titleWord"); "ZENITH".split("").forEach(ch=>{ const s=document.createElement("span"); s.textContent=ch; title.appendChild(s); });
+window.seek = function(t){
+  STARS.forEach(([d,s])=>{ d.style.left = (s.x + Math.sin(t*s.sp+s.ph)*12)+"px"; d.style.top = (s.y + Math.cos(t*s.sp*0.7+s.ph)*8)+"px"; d.style.opacity = 0.25+0.35*(0.5+0.5*Math.sin(t*2*s.sp+s.ph)); });
+  // captions + speaker glow
+  const cur = lines.find(l => t >= l.start && t < l.end);
+  const cap = $("cap");
+  if (cur) { const lt = t - cur.start; const n = Math.floor(clamp(lt/0.9)*cur.text.length*1.4); cap.innerHTML = `<span class="sp" style="color:${cur.speaker==='misa'?'var(--misa)':'var(--zen)'}">${cur.speaker==='misa'?'MISA':'ZENITH'}</span>${cur.text.slice(0, n)}`; cap.style.opacity = clamp(Math.min(lt/0.25, (cur.end-t)/0.25)); }
+  else { cap.innerHTML = ""; }
+  const talkM = cur && cur.speaker === "misa", talkZ = cur && cur.speaker === "zenith";
+  const bob = 1 + 0.06*Math.sin(t*9);
+  $("whoMisa").style.opacity = talkM ? 1 : .35; $("whoMisa").style.transform = talkM ? `scale(${bob})` : "scale(.92)";
+  $("whoZen").style.opacity = talkZ ? 1 : .35; $("whoZen").style.transform = talkZ ? `scale(${bob})` : "scale(.92)";
+  for (const sc of scenes) { const el = $(sceneEl[sc.name]); const inside = t >= sc.start && t < sc.end; const lt = t - sc.start; const left = sc.end - t;
+    el.style.opacity = inside ? clamp(Math.min(lt/0.5, left/0.45)) : 0;
+    el.style.transform = inside ? `scale(${1 + 0.04*(1-ease(lt/0.8))}) translateY(${(1-ease(lt/0.8))*20}px)` : "";
+    if (!inside) continue;
+    if (sc.name === "title") {
+      [...title.children].forEach((s,i)=>{ const x = ease((lt-0.2-i*0.12)/0.6); s.style.opacity = clamp(x); s.style.transform = `translateY(${(1-x)*80}px)`; });
+      fade($("tagline"), (lt-1.6)/0.8);
+    } else if (sc.name === "chaos") {
+      CHAOS.forEach((c,i)=>{ const d=$("ch"+i); const x = ease((lt-0.15*i)/0.6); const ang = (i%2?1:-1)*(4+i*2); const jitter = Math.sin(lt*7+i)*4;
+        d.style.left = (120 + (i%3)*560 + jitter) + "px"; d.style.top = (90 + Math.floor(i/3)*360 + (1-x)*120 + Math.cos(lt*5+i)*4) + "px";
+        d.style.transform = `rotate(${ang*(1-x*0.6)}deg) scale(${0.6+0.4*x})`; d.style.opacity = clamp(x);
+        if (left < 0.9) { const y = ease((0.9-left)/0.9); d.style.transform += ` translateY(${y*900}px) rotate(${y*25}deg)`; } });
+    } else if (sc.name === "memory") {
+      const q = "Where did we leave off in Harbor?"; const qn = Math.floor(clamp((lt-0.3)/1.4)*q.length);
+      const an = Math.floor(clamp((lt-2.2)/7.5)*ANSWER.length);
+      const cur2 = (Math.floor(t*2)%2===0) ? '<span class="cur"></span>' : '';
+      $("term").innerHTML = `<span class="p">you&gt;</span> <span class="c">${q.slice(0,qn)}</span>${qn<q.length?cur2:""}` + (lt>2.0 ? `\n\n<span class="p">misa&gt;</span> ${ANSWER.slice(0,an)}${an<ANSWER.length?cur2:""}` : "");
+      const dur = sc.end - sc.start; const k = dur / 12;   // chips spread over the scene
+      pop($("chip1"), (lt-4.0*k)/0.6, 30); pop($("chip2"), (lt-6.0*k)/0.6, 30); pop($("chip3"), (lt-8.0*k)/0.6, 30); pop($("chip4"), (lt-9.5*k)/0.6, 30);
+    } else if (sc.name === "gemma") {
+      pop($("gpu"), (lt-0.1)/0.8, 60); fade($("lock"), (lt-1.2)/0.5); pop($("g1"), (lt-0.6)/0.6, 40); pop($("g2"), (lt-2.4)/0.7, 40);
+      const z = lines.find(l => l.scene === "gemma" && l.speaker === "zenith"); pop($("g3"), (t-(z?z.start+0.4:sc.start+6))/0.6, 40);
+      $("gpu").querySelector(".fan").style.transform = `rotate(${lt*240}deg)`;
+    } else if (sc.name === "orchestration") {
+      ["n1","n2","n3","n4"].forEach((n,i)=> pop($(n), (lt-0.2-i*0.45)/0.6, 50));
+      const px = 150 + 165 + clamp((lt-2.2)/3.0) * (1470-150); $("pk").style.left = px + "px"; fade($("pk"), (lt-2.0)/0.3);
+      const z = lines.find(l => l.scene === "orchestration" && l.speaker === "zenith"); const zs = z ? z.start : sc.start + 6;
+      pop($("say1"), (t-(zs-1.2))/0.5, 20); pop($("say2"), (t-(zs+0.6))/0.5, 20); pop($("stamp"), (t-(zs+2.2))/0.6, 30);
+      if (t > zs+2.2) { const s = 1 + 0.03*Math.sin(lt*20); $("stamp").style.transform += ` scale(${s})`; }
+    } else {
+      pop($("titleWord2"), lt/0.8, 60); fade($("foot"), (lt-0.9)/0.6);
+    }
+  }
+  return document.fonts.ready.then(()=>true);
+};
+window.seek(0);
+</script></body></html>

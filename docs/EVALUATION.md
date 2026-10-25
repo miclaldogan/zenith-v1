@@ -11,7 +11,7 @@ numbers describe Zenith's behaviour, not any real project.
 | CPU / RAM | 20 logical cores, 15 GiB RAM |
 | GPU | NVIDIA GeForce RTX 4050 Laptop, 6 GiB VRAM (`nvidia-smi`) |
 | Runtime | Ollama 0.30.7, listening on `127.0.0.1:11434` only (`ss -ltnp`), `OLLAMA_HOST` unset |
-| Default model | `gemma3:4b` — 4.3 B parameters, quantization Q4_K_M, 2.75 GiB resident, 100 % in VRAM (`/api/ps`) |
+| Default model | `gemma3:4b` — 4.3 B parameters, quantization Q4_K_M, 2.56 GiB resident, 100 % in VRAM (`/api/ps`) |
 | Context / output caps | `num_ctx 8192`, `num_predict 700`, temperature 0.2, JSON-schema constrained output |
 
 ## Latency (`zenith demo story`, Scene B, gemma3:4b)
@@ -31,7 +31,7 @@ is dominated by generation. GPU memory during inference: ~2.9 GiB used (`nvidia-
 
 `zenith misa --eval --provider ollama-conversation` plays three scripted conversations (A: missing information,
 B: complex status, C: multi-turn reasoning) and applies 21 deterministic checks to the replies the owner sees.
-The checks are lexical; they catch missing content and false claims, not paraphrase quality.
+The checks are lexical; they catch missing content and false claims, not paraphrase quality or semantic accuracy. "Checks passed" counts those checks on the reply the owner saw (which may be the deterministic fallback); "model replies accepted" counts the model's own replies that reached the owner unchanged.
 
 | Model | Runs | Checks passed | Model replies accepted by the validator | Fallbacks to records | Wall per run |
 |---|---|---|---|---|---|
